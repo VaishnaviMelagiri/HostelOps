@@ -45,10 +45,43 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
-        <!-- @Valid / @NotNull on DTOs. Unused in Phase 1, needed from Phase 2 onward. -->
+        <!-- @Valid / @NotNull on DTOs. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+          Spring Security. Adding this dependency alone immediately locks down EVERY endpoint with
+          a generated password and a login form - that is the framework's "secure by default"
+          stance. SecurityConfig then replaces those defaults with our JWT rules.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!--
+          JJWT - creates and verifies the JSON Web Tokens themselves. Split across three artifacts
+          on purpose: only `jjwt-api` is compile-visible, so application code cannot accidentally
+          depend on implementation internals. The other two are runtime-only.
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.12.6</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!--
@@ -75,6 +108,16 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          Lets a test present itself as a given authenticated user, so authorization rules can be
+          exercised without minting real tokens. Not bundled with spring-boot-starter-test.
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

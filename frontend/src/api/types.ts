@@ -22,3 +22,47 @@ export interface ApiErrorBody {
   message: string;
   details?: Record<string, unknown>;
 }
+
+/** Mirrors `com.hostelops.user.Role`. */
+export type Role = 'STUDENT' | 'ADMIN' | 'GUEST';
+
+/**
+ * Mirrors `com.hostelops.security.Permission`.
+ *
+ * Spelled out as a union rather than `string` so a typo in a permission check is a compile error.
+ * `usePermission('REQUEST_CRATE')` would otherwise silently return false forever, hiding a button
+ * from users who should see it — a bug with no error message anywhere.
+ */
+export type Permission =
+  | 'ROOM_READ'
+  | 'REQUEST_CREATE'
+  | 'REQUEST_CANCEL_OWN'
+  | 'ALLOCATION_READ_OWN'
+  | 'REQUEST_QUEUE_READ'
+  | 'REQUEST_APPROVE'
+  | 'REQUEST_REJECT'
+  | 'BED_BLOCK'
+  | 'BED_UNBLOCK'
+  | 'OCCUPANCY_READ';
+
+/** Mirrors `com.hostelops.auth.dto.UserDto`. Returned by both /auth/login and /auth/me. */
+export interface User {
+  id: number;
+  email: string;
+  fullName: string;
+  role: Role;
+  /** Present for STUDENT only. */
+  studentCode?: string;
+  /** Present for STUDENT only. */
+  course?: string;
+  /** Resolved server-side from the role. A UI hint — the server re-checks every request. */
+  permissions: Permission[];
+}
+
+/** Mirrors `com.hostelops.auth.dto.LoginResponse`. */
+export interface LoginResponse {
+  accessToken: string;
+  /** ISO-8601 instant. */
+  expiresAt: string;
+  user: User;
+}

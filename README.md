@@ -7,9 +7,22 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 1 (bootstrap) complete.** No features yet. What works today is the
-> skeleton: a React app that talks to a Spring Boot API that talks to Postgres, and a health check
-> that proves it. Authentication arrives in Phase 2.
+> **Current status: Phase 2 (auth + roles) complete.** You can sign in as any of three roles and
+> see exactly what each is permitted to do. The floor map arrives in Phase 3.
+
+## Demo accounts
+
+Sign in at <http://localhost:5173> — one-click buttons for all three, no typing required.
+
+| role | email | password | can do |
+|---|---|---|---|
+| Student | `student@hostelops.demo` | `Student@123` | browse the map, request a bed, cancel own request |
+| Admin | `admin@hostelops.demo` | `Admin@123` | approve/reject requests, block beds, see occupancy |
+| Guest | `guest@hostelops.demo` | `Guest@123` | read-only — browse only, changes nothing |
+
+All three go through the **same** login endpoint with a real BCrypt password. There is no guest
+mode, no anonymous bypass, and no separate admin login. Sign in as each and watch the permission
+list on the home page change — no code anywhere branches on the role name.
 
 ---
 
@@ -17,10 +30,10 @@ concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_
 
 | | |
 |---|---|
-| Frontend | React 18 · Vite 5 · TypeScript 5 · Tailwind CSS 3 |
-| Backend | Spring Boot 3.5 · Java 17 · Maven (wrapper) |
+| Frontend | React 18 · Vite 6 · TypeScript 5 · Tailwind CSS 3 · React Router 6 |
+| Backend | Spring Boot 3.5 · Java 17 · Spring Security + JWT (jjwt) · Maven (wrapper) |
 | Database | PostgreSQL 16 (Docker) · Flyway migrations |
-| Later | Spring Security + JWT (P2) · WebSocket/STOMP (P7) · Redis, k6 (stretch) |
+| Later | WebSocket/STOMP (P7) · Redis, k6 (stretch) |
 
 ---
 
@@ -60,14 +73,24 @@ cd HostelOps/backend
 Serves <http://localhost:8080>. First run downloads Maven and the dependencies (a few minutes);
 after that it starts in about 3 seconds.
 
-Expect this warning on startup — it is correct for Phase 1:
+On first startup against an empty database it applies `V1__core_tables.sql` and seeds the building
+and the demo accounts:
 
 ```
-WARN o.f.core.internal.command.DbValidate : No migrations found. Are your locations set up correctly?
+Migrating schema "public" to version "1 - core tables"
+Seeded 404 rooms and 576 beds (404 single-occupancy + 172 second beds in doubles)
+Seeded demo STUDENT/ADMIN/GUEST accounts
 ```
 
-Flyway is wired up and connected, and there is simply no schema yet. `V1__core_tables.sql` lands in
-Phase 2. See [`backend/src/main/resources/db/migration/README.md`](backend/src/main/resources/db/migration/README.md).
+Seeding is idempotent — later startups find the data already there and do nothing.
+
+Also expect this warning until you set a signing key. It is correct locally and explained under
+[Configuration](#configuration):
+
+```
+WARN c.hostelops.security.JwtService : JWT_SECRET is not set - falling back to the built-in
+DEVELOPMENT signing key.
+```
 
 ### 3 — Frontend
 
@@ -77,7 +100,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. You should see three green dots: frontend, backend, database.
+Open <http://localhost:5173>. You land on the login page — use a demo button.
 
 ---
 
@@ -104,6 +127,30 @@ The 5-second bound is deliberate. Hikari's default `connection-timeout` is 30 s,
 endpoint hang for half a minute instead of reporting DOWN — long enough for a deployment platform's
 health check to time out. `application.yml` lowers it, and `HealthService` additionally caps the
 query itself at 3 s. Both clocks have to be bounded; setting only one still hangs.
+
+### Auth, without a browser
+
+```bash
+B=http://localhost:8080
+
+# Sign in. The token is a JWT: base64, readable by anyone, signed so nobody can alter it.
+TOKEN=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"guest@hostelops.demo","password":"Guest@123"}' | jq -r .accessToken)
+
+curl -s $B/api/auth/me -H "Authorization: Bearer $TOKEN" | jq
+# GUEST holds exactly one permission: ROOM_READ
+
+# Prove logout is real, not just a client-side gesture:
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $B/api/auth/logout -H "Authorization: Bearer $TOKEN"  # 204
+curl -s -o /dev/null -w '%{http_code}\n' $B/api/auth/me -H "Authorization: Bearer $TOKEN"              # 401
+```
+
+That last pair is the point of the revocation list. The token is still well-formed and still
+minutes from expiry — it is refused because its `jti` is on the denylist. Without that, "log out"
+would only delete the token from this browser and it would stay valid everywhere else.
+
+An unknown email and a wrong password return the identical error, and take the same amount of time,
+so login cannot be used to discover which addresses have accounts.
 
 ---
 
@@ -193,6 +240,21 @@ will need in Phase 12.
 | Backend | [`backend/.env.example`](backend/.env.example) | Spring does not read `.env` automatically — either `set -a; source .env; set +a` or rely on the defaults |
 | Frontend | [`frontend/.env.example`](frontend/.env.example) | copy to `.env.local`; only `VITE_`-prefixed variables reach browser code, and everything there ships to the browser, so **never put a secret in it** |
 
+### The JWT signing key
+
+Left unset, the backend falls back to a signing key hardcoded in `JwtService.java` and warns loudly
+on every startup. That key is in the repository, so it is public, so tokens signed with it can be
+forged by anyone — fine on a laptop, never in a deployment. The alternative (a random key per
+startup) would sign you out on every restart, which during development is pure friction.
+
+```bash
+JWT_SECRET=$(openssl rand -base64 48)     # at least 32 bytes; shorter fails at startup
+```
+
+Tokens live 15 minutes by default (`JWT_ACCESS_TOKEN_TTL`). Short lifetime bounds the damage from a
+leaked token; the revocation list closes the window immediately on logout. Both are needed —
+neither alone is enough.
+
 ### A note on JDK versions on this machine
 
 `java` on the `PATH` is JDK 17, but `JAVA_HOME` points at SDKMAN's JDK 21, so `./mvnw` builds with
@@ -217,21 +279,28 @@ HostelOps/
 │   ├── pom.xml
 │   └── src/main/
 │       ├── java/com/hostelops/         packaged by feature, not by layer
-│       │   ├── config/                 CORS now; security + WebSocket later
-│       │   ├── health/                 the only working endpoint in Phase 1
-│       │   ├── room/ claim/ occupancy/ realtime/ expiry/ seed/   (empty, Phases 2-7)
-│       │   ├── security/ common/       (empty, Phase 2)
+│       │   ├── auth/                   login, logout, /me + DTOs
+│       │   ├── common/                 ErrorCode, ApiError, GlobalExceptionHandler
+│       │   ├── config/                 SecurityConfig, CorsConfig, SchedulingConfig
+│       │   ├── health/                 GET /api/health
+│       │   ├── security/               JWT, permissions, revocation list
+│       │   ├── seed/                   SeedRunner — building + demo accounts
+│       │   ├── user/                   User entity, Role, repository
+│       │   ├── room/ claim/ occupancy/ realtime/ expiry/   (empty, Phases 3-7)
 │       │   └── HostelOpsApplication.java
 │       └── resources/
 │           ├── application.yml
-│           ├── db/migration/           Flyway — empty until Phase 2
+│           ├── db/migration/           V1__core_tables.sql
 │           └── seed/                   rooms.json (404) + wings-summary.json (6 wings)
 └── frontend/
     └── src/
-        ├── api/                        client.ts, health.ts, types.ts
-        ├── auth/ realtime/ features/   (empty, Phases 2-8)
-        ├── App.tsx                     the connectivity screen
-        └── main.tsx
+        ├── api/                        client.ts, auth.ts, health.ts, types.ts
+        ├── auth/                       AuthContext, LoginPage, DemoAccountButtons,
+        │                               ProtectedRoute, useAuth, usePermission
+        ├── features/home/              signed-in landing page
+        ├── features/map|student|admin/ (empty, Phases 3-8)
+        ├── realtime/                   (empty, Phase 7)
+        ├── routes.tsx  App.tsx  main.tsx
 ```
 
 Empty directories are intentional — they are the Phase 0 folder contract, so each later phase adds
@@ -241,9 +310,9 @@ files rather than inventing a structure on the spot.
 
 ## Seed data
 
-`backend/src/main/resources/seed/rooms.json` holds all 404 rooms, and
-`wings-summary.json` the 6 wing definitions. Nothing loads them yet; the seed runner arrives with
-the schema in Phase 2.
+`backend/src/main/resources/seed/rooms.json` holds all 404 rooms and `wings-summary.json` the 6 wing
+definitions. `SeedRunner` loads them on first startup, deriving beds from room capacity: every room
+gets bed `A`, and every Double additionally gets `B`.
 
 | wing | rooms | type | bathroom | floors | beds |
 |---|---|---|---|---|---|
@@ -266,9 +335,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | | phase | status |
 |---|---|---|
 | 0 | Architecture contract | done |
-| 1 | Bootstrap — scaffolds, Postgres, health check | **done** |
-| 2 | Auth + roles (Student, Admin, Guest) | next |
-| 3 | Floor map (read-only) | |
+| 1 | Bootstrap — scaffolds, Postgres, health check | done |
+| 2 | Auth + roles (Student, Admin, Guest) | **done** |
+| 3 | Floor map (read-only) | next |
 | 4 | Request flow + the two partial unique indexes | |
 | 5 | Admin approve / reject / block | |
 | 6 | Auto-expiry of stale requests | |

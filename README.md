@@ -255,6 +255,22 @@ Tokens live 15 minutes by default (`JWT_ACCESS_TOKEN_TTL`). Short lifetime bound
 leaked token; the revocation list closes the window immediately on logout. Both are needed —
 neither alone is enough.
 
+### Where the token lives in the browser
+
+`sessionStorage`, so a page refresh does not sign you out.
+
+The stricter-sounding alternative — keeping it only in a JavaScript variable — does not actually
+buy security. A script running in the page can reach the token either way: from `sessionStorage`
+it is one synchronous read, from a module variable it means patching `fetch` and waiting for the
+next request. An extra step, not a barrier. What limits the damage is the 15-minute lifetime and
+server-side revocation, both of which are built.
+
+`sessionStorage` rather than `localStorage` is a real distinction: it is scoped to one tab and
+cleared when that tab closes, so a token cannot outlive the session on a shared machine.
+
+The genuine upgrade is an httpOnly refresh cookie, which no script can read at all. Out of scope
+here — it needs CSRF protection and refresh-token rotation.
+
 ### A note on JDK versions on this machine
 
 `java` on the `PATH` is JDK 17, but `JAVA_HOME` points at SDKMAN's JDK 21, so `./mvnw` builds with

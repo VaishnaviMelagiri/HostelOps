@@ -14,13 +14,14 @@ import java.util.List;
  * <p>Both endpoints return the same shape on purpose, so the frontend has one type for "the signed
  * in user" rather than two that drift apart.
  *
- * <p>{@code permissions} is an addition to the Phase 0 contract, which listed only id/fullName/role.
- * It is here because the frontend has to decide what to render - a GUEST must not be shown a
- * "Request this bed" button it will only ever get a 403 from. Sending the resolved permission list
- * means the UI applies exactly the same rules as the server, from the same source
- * ({@link RolePermissions}), instead of reimplementing "what can a guest do" in TypeScript where it
- * could silently drift. It is a UI hint only: the server re-checks every request regardless, so a
- * tampered client gains nothing.
+ * <p>{@code permissions} is part of the API contract. The frontend has to decide what to render - a
+ * GUEST must not be shown a "Request this bed" button it will only ever get a 403 from. Sending the
+ * server's own resolved list means the UI applies exactly the same rules from the same source
+ * ({@link RolePermissions}) instead of reimplementing "what can a guest do" in TypeScript, where it
+ * would silently drift the first time the matrix changed.
+ *
+ * <p>It is a rendering hint and nothing more: the server re-authorises every request regardless, so
+ * editing this list in the browser buys an attacker a visible button and a 403.
  *
  * <p>Note what is NOT here: no password hash, no {@code active} flag, no created timestamp. A DTO
  * is a deliberate, minimal projection of an entity - never the entity itself.

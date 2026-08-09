@@ -65,8 +65,10 @@ public class AuthController {
      * placed in the security context for this request - so the method never parses a token itself
      * and cannot be reached at all without a valid one.
      *
-     * <p>Used by the frontend on page load: the browser has a token in memory but no idea who it
-     * belongs to, and this is how it finds out without trusting anything it decoded locally.
+     * <p>Used by the frontend on page load: the browser has a token in sessionStorage but nothing
+     * trustworthy about it. It could decode the payload locally - a JWT is only base64 - but a
+     * decoded claim is an assertion, not a fact, and only the server can say whether the signature
+     * holds, whether the token has been revoked, and whether the account is still active.
      */
     @GetMapping("/me")
     public UserDto me(@AuthenticationPrincipal AppUserPrincipal principal) {

@@ -12,17 +12,28 @@ import { setAccessToken, setUnauthenticatedHandler } from '../api/client';
 import type { Permission, User } from '../api/types';
 
 /**
- * Key under which the token is mirrored so a page refresh does not sign you out.
+ * Key under which the token is kept so a page refresh does not sign you out.
  *
- * `sessionStorage`, not `localStorage`, and that difference is the whole point: sessionStorage is
- * scoped to one browser tab and is cleared when that tab closes, so a token cannot outlive the
- * session on a shared machine.
+ * The Phase 0 contract originally said "JWT in memory". That sounds stricter, but it does not
+ * actually buy security, and it is worth being clear about why rather than repeating the folklore:
  *
- * The Phase 0 contract said "JWT in memory", which is stricter still — but it means every page
- * refresh signs the user out, which during a demo reads as a broken app. This is the deliberate
- * middle ground, and it is defensible because of what surrounds it: the token lives 15 minutes,
- * logout revokes it server-side immediately, and it grants nothing that re-authenticating would
- * not. The genuinely stronger design is an httpOnly refresh cookie, which is out of scope here.
+ * Any script running in this page can reach the token either way. From sessionStorage it is one
+ * synchronous read; from a module-scoped variable it means patching `fetch` and waiting for the
+ * next request to go out. That is an extra step for an attacker, not a barrier — an XSS payload
+ * that can run at all can do both. So choosing in-memory would trade away refresh-survival (every
+ * page reload signs the user out, which in a demo reads as a broken app) in exchange for
+ * protection the wording never actually provided.
+ *
+ * What DOES limit the damage here is elsewhere: the token lives 15 minutes, logout revokes it
+ * server-side immediately, and it grants nothing that signing in again would not.
+ *
+ * `sessionStorage` rather than `localStorage` is a real distinction though, and the reason to
+ * prefer it: sessionStorage is scoped to one tab and cleared when that tab closes, so a token
+ * cannot outlive the session on a shared machine.
+ *
+ * The genuine upgrade is an httpOnly refresh cookie, which no script can read at all. That is
+ * correctly out of scope here — it needs CSRF protection and a refresh-token rotation flow, which
+ * is a larger design than this project sets out to defend.
  */
 const TOKEN_STORAGE_KEY = 'hostelops.accessToken';
 

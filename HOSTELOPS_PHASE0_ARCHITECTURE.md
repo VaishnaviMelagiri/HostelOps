@@ -39,7 +39,7 @@ Both mechanisms are needed; they answer different questions. Interviews will not
 │  ┌────────────┐  ┌───────────────┐  ┌──────────────────────┐  │
 │  │ Auth ctx   │  │ Floor map     │  │ Dashboards           │  │
 │  │ (JWT in    │  │ (SVG grid,    │  │ student / admin      │  │
-│  │  memory)   │  │  popover)     │  │                      │  │
+│  │ sessionSt.)│  │  popover)     │  │                      │  │
 │  └─────┬──────┘  └───────┬───────┘  └──────────┬───────────┘  │
 │        │  REST (fetch, Bearer token)           │              │
 │        │                 │  STOMP over WebSocket              │
@@ -114,9 +114,16 @@ backend/
 │   │   ├── JwtService.java              # sign / parse / jti
 │   │   ├── JwtAuthFilter.java           # OncePerRequestFilter
 │   │   ├── TokenRevocationService.java  # logout denylist
-│   │   ├── AppUserDetailsService.java
-│   │   └── Permissions.java             # named authorities + role -> authority mapping
-│   │                                    # (STUDENT / ADMIN / GUEST) — never role strings in checks
+│   │   ├── RevokedToken.java  RevokedTokenRepository.java
+│   │   ├── AppUserDetailsService.java  AppUserPrincipal.java
+│   │   ├── Permission.java              # named authorities
+│   │   └── RolePermissions.java         # the ONLY place a Role appears in an authz context
+│   ├── user/                            # domain identity, separate from the security machinery
+│   │   ├── User.java  Role.java         # claim/ needs User for student identity from Phase 4
+│   │   └── UserRepository.java
+│   ├── auth/
+│   │   ├── AuthController.java  AuthService.java
+│   │   └── dto/  (LoginRequest, LoginResponse, UserDto)
 │   ├── common/
 │   │   ├── ErrorCode.java               # enum — the API's stable error vocabulary
 │   │   ├── ApiError.java                # {code, message, details}
@@ -484,6 +491,15 @@ This is exactly why the checks are `@PreAuthorize("hasAuthority('REQUEST_CREATE'
 in this table and a new set of granted authorities, nothing else. That's the payoff for the
 permissions-not-roles rule, and it's a concrete thing to point at in an interview rather than a claim.
 
+**ADMIN is deliberately NOT a superset of STUDENT — settled, not provisional.** Read the table
+again: an admin has no `REQUEST_CREATE`, no `REQUEST_CANCEL_OWN`, no `ALLOCATION_READ_OWN`. An admin
+has no allocation of their own and does not occupy student beds, so those permissions would describe
+an ability nobody intends them to have. The tempting mental model — "admin can do everything a
+student can, plus more" — is the one that quietly grants exactly those. Two tests pin this
+(`RolePermissionsTest`, `SecurityRulesTest`), because it is the kind of thing a later refactor
+"tidies up" into a hierarchy without noticing what it hands out. If a real staff member ever needs
+their own bed, they get a second STUDENT account; the role describes a job, not a rank.
+
 **Why GUEST exists:** a reviewer or interviewer can open the deployed app and explore the real
 576-bed building immediately, without creating state — no pending request left behind on a bed, no
 cleanup between demos. It is a read-only lens on the same system, not a fourth code path.
@@ -491,6 +507,38 @@ cleanup between demos. It is a read-only lens on the same system, not a fourth c
 **Real-time:** GUEST subscribes to the public per-floor topic like anyone else (that payload carries
 no identities, so there is nothing to withhold). GUEST has **no** private `/user/queue/requests` — it
 can never own a request, so nothing would ever be published there.
+
+**The resolved permission list is part of the API.** Both `POST /api/auth/login` and
+`GET /api/auth/me` return `permissions[]` alongside the user. The frontend needs it to decide what
+to *render* — a GUEST must not be shown a "Request this bed" button that can only ever return 403.
+Sending the server's own resolved list means the UI applies the same rules from the same source
+(`RolePermissions`) instead of reimplementing "what can a guest do" in TypeScript, where it would
+silently drift the first time the matrix changed. It is a rendering hint and nothing more: the
+server re-authorises every request regardless, so editing the list in the browser buys an attacker
+a visible button and a 403.
+
+### Where the access token lives (browser)
+
+`sessionStorage`, keyed `hostelops.accessToken`.
+
+An earlier draft of this contract said "JWT in memory", which sounds stricter but does not survive
+examination. Any script running in the page can reach the token either way: from `sessionStorage`
+it is one synchronous read, from a module-scoped variable it means patching `fetch` and waiting for
+the next request. That is an extra step for an attacker, not a barrier. Choosing in-memory would
+therefore give up refresh-survival — every page reload signing the user out, which in a demo reads
+as a broken app — in exchange for protection the wording never actually provided.
+
+What genuinely limits the damage is elsewhere, and is built: a 15-minute token lifetime, and
+server-side revocation that takes effect the instant logout is called.
+
+`sessionStorage` over `localStorage` **is** a real distinction, and the reason to prefer it: it is
+scoped to a single tab and cleared when that tab closes, so a token cannot outlive the session on a
+shared machine.
+
+The actual upgrade is an httpOnly refresh cookie, which no script can read at all. That stays out of
+scope: it requires CSRF protection and a refresh-token rotation flow, which is a larger design than
+this project sets out to defend — and saying so plainly is better than implying the in-memory
+variant was equivalent to it.
 
 **One honest boundary:** nothing in the *database* stops a `bed_claims` row from pointing at a GUEST
 user — `student_id` is just an FK to `users`. That rule lives only in the permission layer, because a
@@ -526,11 +574,15 @@ Vercel demo deploy) so the flag exists to turn them off, without that ever chang
 POST /api/auth/login
   → { "email": "...", "password": "..." }
   ← 200 { "accessToken": "eyJ...", "expiresAt": "2026-08-09T12:45:00Z",
-          "user": { "id": 7, "fullName": "Asha R", "role": "STUDENT" } }
+          "user": { "id": 7, "email": "asha@hostelops.demo", "fullName": "Asha R",
+                    "role": "STUDENT", "studentCode": "1MS22CS001", "course": "B.E. CSE",
+                    "permissions": ["ALLOCATION_READ_OWN","REQUEST_CANCEL_OWN",
+                                    "REQUEST_CREATE","ROOM_READ"] } }
   ← 401 UNAUTHENTICATED
 
 POST /api/auth/logout        (Bearer)   ← 204   # inserts jti into revoked_tokens
-GET  /api/auth/me            (Bearer)   ← 200 { id, fullName, email, role, studentCode?, course? }
+GET  /api/auth/me            (Bearer)   ← 200  the SAME user shape as login returns
+       { id, email, fullName, role, studentCode?, course?, permissions[] }
 ```
 
 ### Browsing (STUDENT + ADMIN + GUEST — one endpoint, byte-identical payload for all three)

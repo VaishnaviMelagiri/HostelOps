@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { HomePage } from './features/home/HomePage';
+import { MapPage } from './features/map/MapPage';
 
 /**
  * Route table.
@@ -19,6 +20,17 @@ export function AppRoutes() {
         element={
           <ProtectedRoute>
             <HomePage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/map"
+        element={
+          // All three roles hold ROOM_READ, so nobody is turned away here - but naming the
+          // permission keeps the rule visible instead of implied.
+          <ProtectedRoute requires={['ROOM_READ']}>
+            <MapPage />
           </ProtectedRoute>
         }
       />

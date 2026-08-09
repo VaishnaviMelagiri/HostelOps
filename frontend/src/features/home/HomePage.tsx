@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getHealth } from '../../api/health';
 import type { Health, Role } from '../../api/types';
 import { useAuth } from '../../auth/useAuth';
@@ -98,8 +99,15 @@ export function HomePage() {
             ))}
           </ul>
 
+          <Link
+            to="/map"
+            className="mb-4 block rounded-lg bg-slate-900 px-4 py-3 text-center font-medium
+                       text-white hover:bg-slate-700"
+          >
+            Open the floor map
+          </Link>
+
           <div className="space-y-2">
-            <ActionRow label="Browse the floor map" available note="Phase 3" />
             <ActionRow label="Request a bed" available={canRequestBed} note="Phase 4" />
             <ActionRow label="Review the pending queue" available={canSeeQueue} note="Phase 5" />
             <ActionRow label="Approve or reject requests" available={canApprove} note="Phase 5" />

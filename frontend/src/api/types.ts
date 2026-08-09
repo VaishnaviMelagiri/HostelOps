@@ -66,3 +66,68 @@ export interface LoginResponse {
   expiresAt: string;
   user: User;
 }
+
+// ─────────────────────────── Floor map (Phase 3) ───────────────────────────
+
+/** Mirrors `com.hostelops.room.dto.BedStatus` — the four states one bed can be in. */
+export type BedStatus = 'AVAILABLE' | 'PENDING' | 'ALLOCATED' | 'BLOCKED';
+
+/** Mirrors `RoomStatus` — a whole-room roll-up, used only to tint a cell at a glance. */
+export type RoomStatus = 'AVAILABLE' | 'PARTIAL' | 'FULL' | 'BLOCKED';
+
+/**
+ * Mirrors `BedStateDto`.
+ *
+ * Note what is absent: no student id, no name. A bed can be seen to be taken; who took it is never
+ * sent to the browser. There is no field here to leak.
+ */
+export interface BedState {
+  bedId: number;
+  bedLabel: string;
+  status: BedStatus;
+}
+
+/** Grid position — column and row, both 1-based. Not pixels; the renderer decides the sizing. */
+export interface Cell {
+  col: number;
+  row: number;
+}
+
+export interface Grid {
+  columns: number;
+  rows: number;
+}
+
+/** Mirrors `RoomCellDto`. */
+export interface RoomCell {
+  roomId: number;
+  roomNumber: number;
+  roomType: 'Single' | 'Double';
+  bathroomType: 'Attached' | 'Common';
+  capacity: number;
+  cell: Cell;
+  roomStatus: RoomStatus;
+  beds: BedState[];
+}
+
+/** Mirrors `FloorRoomsDto`. */
+export interface FloorRooms {
+  wing: string;
+  floor: string;
+  floorLevel: number;
+  grid: Grid;
+  rooms: RoomCell[];
+}
+
+/** Mirrors `WingSummaryDto`. */
+export interface WingSummary {
+  wing: string;
+  block: string;
+  roomType: 'Single' | 'Double';
+  bathroomType: 'Attached' | 'Common';
+  /** Ordered bottom to top, e.g. ["BAS","GF","FF","SF","TF"]. */
+  floors: string[];
+  roomsPerFloor: number;
+  totalRooms: number;
+  totalBeds: number;
+}

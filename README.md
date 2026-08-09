@@ -7,8 +7,8 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 2 (auth + roles) complete.** You can sign in as any of three roles and
-> see exactly what each is permitted to do. The floor map arrives in Phase 3.
+> **Current status: Phase 3 (floor map) complete.** Sign in, browse all 6 wings and 404 rooms,
+> and see every bed's status colour-coded. Read-only — requesting a bed arrives in Phase 4.
 
 ## Demo accounts
 
@@ -151,6 +151,39 @@ would only delete the token from this browser and it would stay valid everywhere
 
 An unknown email and a wrong password return the identical error, and take the same amount of time,
 so login cannot be used to discover which addresses have accounts.
+
+### Browsing the building
+
+```bash
+TOKEN=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"guest@hostelops.demo","password":"Guest@123"}' | jq -r .accessToken)
+
+curl -s $B/api/wings -H "Authorization: Bearer $TOKEN" | jq
+# 6 wings, 404 rooms, 576 beds - all derived from the rooms table, not from wings-summary.json
+
+curl -s "$B/api/wings/B/floors/FF/rooms" -H "Authorization: Bearer $TOKEN" | jq
+# grid + one entry per room, each carrying its beds and their status
+
+curl -s "$B/api/wings/A/floors/BAS/rooms" -H "Authorization: Bearer $TOKEN"
+# 404 - wing A has no basement. Only wings E and F do.
+```
+
+Every bed reads `AVAILABLE` on a fresh database, because no requests exist yet. To see the other
+colours before Phase 4 exists, insert a claim by hand:
+
+```bash
+docker exec hostelops-db psql -U hostelops -d hostelops -c "
+INSERT INTO bed_claims (bed_id, student_id, status, created_by, expires_at)
+SELECT b.id, 1, 'PENDING', 1, now() + interval '48 hours'
+FROM beds b JOIN rooms r ON r.id = b.room_id
+WHERE r.room_number = 113 AND b.bed_label = 'A';"
+
+# remove all hand-inserted test claims again:
+docker exec hostelops-db psql -U hostelops -d hostelops -c "DELETE FROM bed_claims;"
+```
+
+Nothing is cached: the next map request recomputes every status from `bed_claims` via the
+`bed_status` view. That is the point of deriving status rather than storing it.
 
 ---
 
@@ -306,7 +339,7 @@ HostelOps/
 │       │   └── HostelOpsApplication.java
 │       └── resources/
 │           ├── application.yml
-│           ├── db/migration/           V1__core_tables.sql
+│           ├── db/migration/           V1__core_tables.sql, V2__bed_status_view.sql
 │           └── seed/                   rooms.json (404) + wings-summary.json (6 wings)
 └── frontend/
     └── src/
@@ -314,7 +347,8 @@ HostelOps/
         ├── auth/                       AuthContext, LoginPage, DemoAccountButtons,
         │                               ProtectedRoute, useAuth, usePermission
         ├── features/home/              signed-in landing page
-        ├── features/map|student|admin/ (empty, Phases 3-8)
+        ├── features/map/               SVG floor map, wing/floor picker, legend
+        ├── features/student|admin/     (empty, Phases 4-8)
         ├── realtime/                   (empty, Phase 7)
         ├── routes.tsx  App.tsx  main.tsx
 ```
@@ -352,9 +386,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 |---|---|---|
 | 0 | Architecture contract | done |
 | 1 | Bootstrap — scaffolds, Postgres, health check | done |
-| 2 | Auth + roles (Student, Admin, Guest) | **done** |
-| 3 | Floor map (read-only) | next |
-| 4 | Request flow + the two partial unique indexes | |
+| 2 | Auth + roles (Student, Admin, Guest) | done |
+| 3 | Floor map (read-only) | **done** |
+| 4 | Request flow + the two partial unique indexes | next |
 | 5 | Admin approve / reject / block | |
 | 6 | Auto-expiry of stale requests | |
 | 7 | WebSocket real-time updates | |

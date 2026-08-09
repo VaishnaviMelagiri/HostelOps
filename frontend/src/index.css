@@ -1,0 +1,7 @@
+/* Tailwind injects its generated CSS at these three directives:
+     base       - a CSS reset plus sensible element defaults
+     components - reusable classes (we have none yet)
+     utilities  - the huge set of single-purpose classes (p-4, text-sm, ...) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

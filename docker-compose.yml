@@ -1,0 +1,37 @@
+# Local infrastructure only. The Spring Boot app and the Vite dev server run on your machine
+# (so restarts are instant and the debugger attaches normally); only Postgres runs in Docker.
+#
+#   docker compose up -d      start Postgres in the background
+#   docker compose ps         check it is healthy
+#   docker compose logs -f db follow its logs
+#   docker compose down       stop it, keep the data
+#   docker compose down -v    stop it and DELETE the data volume (full reset)
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hostelops-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hostelops
+      POSTGRES_USER: hostelops
+      POSTGRES_PASSWORD: hostelops
+    ports:
+      # host:container - the app connects to localhost:5432.
+      - "5432:5432"
+    volumes:
+      # Named volume, so `docker compose down` keeps your data and `down -v` wipes it.
+      - hostelops-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `docker compose ps` shows "healthy" only once Postgres is actually accepting connections,
+      # not merely once the container has started. Postgres briefly starts, stops and restarts
+      # during first-time initialisation, so "container is up" is not the same as "database is
+      # ready" - starting the backend too early is the classic first-run confusion.
+      test: ["CMD-SHELL", "pg_isready -U hostelops -d hostelops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  hostelops-pgdata:

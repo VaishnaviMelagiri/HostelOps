@@ -1,0 +1,94 @@
+[
+  {
+    "wing": "A",
+    "block": "M.S. Ramaiah Hostels - Triveni",
+    "room_type": "Single",
+    "bathroom_type": "Attached",
+    "room_range": "1-64",
+    "floors": [
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 16,
+    "total_rooms": 64
+  },
+  {
+    "wing": "B",
+    "block": "M.S. Ramaiah Hostels - Triveni",
+    "room_type": "Double",
+    "bathroom_type": "Attached",
+    "room_range": "101-148",
+    "floors": [
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 12,
+    "total_rooms": 48
+  },
+  {
+    "wing": "C",
+    "block": "M.S. Ramaiah Hostels - Triveni",
+    "room_type": "Double",
+    "bathroom_type": "Common",
+    "room_range": "201-264",
+    "floors": [
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 16,
+    "total_rooms": 64
+  },
+  {
+    "wing": "D",
+    "block": "M.S. Ramaiah Hostels - Triveni",
+    "room_type": "Single",
+    "bathroom_type": "Common",
+    "room_range": "301-388",
+    "floors": [
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 22,
+    "total_rooms": 88
+  },
+  {
+    "wing": "E",
+    "block": "MSR Hostel - Triveni Block",
+    "room_type": "Single",
+    "bathroom_type": "Attached",
+    "room_range": "401-480",
+    "floors": [
+      "BAS",
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 16,
+    "total_rooms": 80
+  },
+  {
+    "wing": "F",
+    "block": "MSR Hostel - Triveni Block",
+    "room_type": "Double",
+    "bathroom_type": "Attached",
+    "room_range": "501-560",
+    "floors": [
+      "BAS",
+      "GF",
+      "FF",
+      "SF",
+      "TF"
+    ],
+    "rooms_per_floor": 12,
+    "total_rooms": 60
+  }
+]

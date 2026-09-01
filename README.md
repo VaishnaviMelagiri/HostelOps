@@ -279,7 +279,30 @@ CHOKIDAR_USEPOLLING=true npm run dev
 
 Postgres is not reachable. `docker compose ps` — the container must say `(healthy)`, not just `Up`.
 
-### Port already in use
+### `./mvnw spring-boot:run` exits 1 with "Port 8080 was already in use"
+
+Almost always an earlier backend still running — often one you thought you had stopped. Note that
+`spring-boot:run` **forks a second JVM**: killing the Maven process leaves the actual application
+running and still holding the port, which is why this comes back after a Ctrl-C that looked like it
+worked.
+
+Find and stop whatever holds the port:
+
+```bash
+ss -ltnp | grep ':8080'                 # shows pid=NNNN
+kill <pid>
+```
+
+Or in one line:
+
+```bash
+kill $(ss -ltnp | grep ':8080' | grep -oP 'pid=\K[0-9]+' | head -1)
+```
+
+Then start again. The app itself is fine — the failure happens at the very end of startup, when
+Tomcat tries to bind the port, so everything before it (Flyway, seeding) has already succeeded.
+
+### Port already in use — frontend
 
 `8080` (backend) and `5173` (frontend) are both pinned deliberately: Vite is set to `strictPort`, so
 it fails loudly rather than silently moving to `5174`, which would break the backend's CORS

@@ -71,6 +71,12 @@ hostelops:
     revocation-cleanup-interval: PT1H
     revocation-cleanup-initial-delay: PT1M
 
+  request:
+    # How long a PENDING request survives without an admin decision before the Phase 6 sweep
+    # expires it and frees the bed. Set at insert time, so expiry is a plain "expires_at <= now()"
+    # scan rather than per-row arithmetic.
+    ttl: ${HOSTELOPS_REQUEST_TTL:PT48H}
+
   seed:
     # Creates the three demo accounts on startup if absent. Set false for a real deployment.
     demo-users: ${SEED_DEMO_USERS:true}

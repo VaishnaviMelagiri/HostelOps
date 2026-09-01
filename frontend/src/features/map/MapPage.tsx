@@ -2,60 +2,75 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { getFloor, listWings } from '../../api/rooms';
-import type { FloorRooms, RoomCell, WingSummary } from '../../api/types';
+import { cancelRequest, myAllocation as fetchMyAllocation, requestBed } from '../../api/requests';
+import type { FloorRooms, MyAllocation, RoomCell, WingSummary } from '../../api/types';
 import { useAuth } from '../../auth/useAuth';
-import { BED_STATUS_STYLE, ROOM_STATUS_LABEL } from '../../lib/status';
+import { usePermission } from '../../auth/usePermission';
 import { FloorMap } from './FloorMap';
 import { Legend } from './Legend';
+import { RoomPopover } from './RoomPopover';
 import { WingFloorPicker } from './WingFloorPicker';
 
-/**
- * Browse the building. Read-only in Phase 3 — clicking a room shows its details, nothing more.
- * The "Request this bed" button arrives in Phase 4.
- */
+const NO_ALLOCATION: MyAllocation = { state: 'NONE', claim: null };
+
+/** Browse the building, and — from Phase 4 — request a bed. */
 export function MapPage() {
   const { user } = useAuth();
+  const canRequest = usePermission('REQUEST_CREATE');
+  const canReadOwn = usePermission('ALLOCATION_READ_OWN');
 
   const [wings, setWings] = useState<WingSummary[]>([]);
-  const [wing, setWing] = useState<string>('A');
-  const [floor, setFloor] = useState<string>('GF');
+  const [wing, setWing] = useState('A');
+  const [floor, setFloor] = useState('GF');
   const [floorData, setFloorData] = useState<FloorRooms | null>(null);
   const [selected, setSelected] = useState<RoomCell | null>(null);
+  const [allocation, setAllocation] = useState<MyAllocation>(NO_ALLOCATION);
+  const [busyBedId, setBusyBedId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load the wing list once.
+  const loadFloor = useCallback(async (w: string, f: string) => {
+    const data = await getFloor(w, f);
+    setFloorData(data);
+    return data;
+  }, []);
+
+  const loadAllocation = useCallback(async () => {
+    // ADMIN and GUEST have no allocation to read and would get a 403 - so do not ask.
+    if (!canReadOwn) return NO_ALLOCATION;
+    const mine = await fetchMyAllocation();
+    setAllocation(mine);
+    return mine;
+  }, [canReadOwn]);
+
   useEffect(() => {
     let cancelled = false;
     listWings()
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || data.length === 0) return;
         setWings(data);
-        if (data.length > 0) {
-          setWing(data[0].wing);
-          setFloor(data[0].floors[0]);
-        }
+        setWing(data[0].wing);
+        setFloor(data[0].floors[0]);
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof ApiError ? e.message : 'Could not load wings.');
       });
+    void loadAllocation();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAllocation]);
 
-  // Reload the map whenever the wing or floor changes.
   useEffect(() => {
     if (!wing || !floor) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-
-    getFloor(wing, floor)
-      .then((data) => {
-        if (cancelled) return;
-        setFloorData(data);
-        setSelected(null); // a room from the previous floor is no longer on screen
+    loadFloor(wing, floor)
+      .then(() => {
+        if (!cancelled) setSelected(null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -65,26 +80,75 @@ export function MapPage() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-
     return () => {
       cancelled = true;
     };
-  }, [wing, floor]);
+  }, [wing, floor, loadFloor]);
 
-  /**
-   * Switching wing must also switch to a floor that wing actually has — otherwise moving from
-   * wing E (which has a basement) to wing A while "BAS" is selected asks for a floor that does not
-   * exist and lands on a 404.
-   */
   const onWingChange = useCallback(
     (nextWing: string) => {
       const target = wings.find((w) => w.wing === nextWing);
       setWing(nextWing);
-      if (target && !target.floors.includes(floor)) {
-        setFloor(target.floors[0]);
-      }
+      if (target && !target.floors.includes(floor)) setFloor(target.floors[0]);
     },
     [wings, floor],
+  );
+
+  /**
+   * After any successful action, refetch BOTH the floor and the allocation from the server rather
+   * than patching local state. The bed's new status is derived server-side, and another student may
+   * have changed something else on this floor in the meantime — guessing locally would show a map
+   * that quietly disagrees with the database. Phase 7 replaces the refetch with a live WebSocket
+   * push; the correctness argument stays the same.
+   */
+  const refresh = useCallback(async () => {
+    const [updated] = await Promise.all([loadFloor(wing, floor), loadAllocation()]);
+    setSelected((current) =>
+      current ? (updated.rooms.find((r) => r.roomId === current.roomId) ?? null) : null,
+    );
+  }, [wing, floor, loadFloor, loadAllocation]);
+
+  const onRequest = useCallback(
+    async (bedId: number) => {
+      setBusyBedId(bedId);
+      setActionError(null);
+      try {
+        const claim = await requestBed(bedId);
+        setBanner(
+          `Requested bed ${claim.roomNumber}-${claim.bedLabel}. Waiting for an admin to approve it.`,
+        );
+        await refresh();
+      } catch (e: unknown) {
+        // The server's message already explains each case precisely — "that bed was just taken",
+        // "you already have an active request" — so show it rather than inventing our own wording.
+        setActionError(e instanceof ApiError ? e.message : 'Could not request that bed.');
+        if (e instanceof ApiError && e.status === 409) {
+          // Someone else won the race, so what is on screen is already stale.
+          await refresh();
+        }
+      } finally {
+        setBusyBedId(null);
+      }
+    },
+    [refresh],
+  );
+
+  const onCancel = useCallback(
+    async (requestId: number) => {
+      setBusyBedId(-1);
+      setActionError(null);
+      try {
+        await cancelRequest(requestId);
+        setBanner('Request cancelled. The bed is available again.');
+        await refresh();
+      } catch (e: unknown) {
+        setActionError(e instanceof ApiError ? e.message : 'Could not cancel that request.');
+        await refresh();
+      } finally {
+        setBusyBedId(null);
+      }
+    },
+    [refresh],
   );
 
   return (
@@ -112,6 +176,39 @@ export function MapPage() {
       </header>
 
       <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
+        {allocation.state !== 'NONE' && allocation.claim && (
+          <section
+            className={`rounded-xl border p-4 ${
+              allocation.state === 'ALLOCATED'
+                ? 'border-blue-200 bg-blue-50'
+                : 'border-amber-200 bg-amber-50'
+            }`}
+          >
+            <p className="text-sm">
+              <span className="font-semibold">
+                {allocation.state === 'ALLOCATED' ? 'Your bed: ' : 'Awaiting approval: '}
+              </span>
+              Room {allocation.claim.roomNumber}, bed {allocation.claim.bedLabel} — wing{' '}
+              {allocation.claim.wing}, {allocation.claim.floor}
+            </p>
+            {allocation.state === 'PENDING' && (
+              <button
+                type="button"
+                onClick={() => void onCancel(allocation.claim!.requestId)}
+                disabled={busyBedId !== null}
+                className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm
+                           font-medium hover:bg-amber-100 disabled:opacity-60"
+              >
+                Cancel request
+              </button>
+            )}
+          </section>
+        )}
+
+        {banner && (
+          <p className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{banner}</p>
+        )}
+
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <WingFloorPicker
             wings={wings}
@@ -143,61 +240,35 @@ export function MapPage() {
               <FloorMap
                 floor={floorData}
                 selectedRoomId={selected?.roomId ?? null}
-                onSelectRoom={setSelected}
+                onSelectRoom={(room) => {
+                  setActionError(null);
+                  setSelected(room);
+                }}
               />
               <p className="mt-4 text-xs text-slate-400">
-                Hover a room for its details, or click to select. {floorData.rooms.length} rooms on
-                this floor.
+                Click a room to see its beds{canRequest ? ' and request one' : ''}.{' '}
+                {floorData.rooms.length} rooms on this floor.
               </p>
             </>
           )}
         </section>
-
-        {selected && (
-          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-start justify-between">
-              <div>
-                <h2 className="text-xl font-semibold">Room {selected.roomNumber}</h2>
-                <p className="text-sm text-slate-500">
-                  {selected.roomType} · {selected.bathroomType} bathroom · {ROOM_STATUS_LABEL[selected.roomStatus]}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelected(null)}
-                className="rounded-lg border border-slate-300 px-2.5 py-1 text-sm hover:bg-slate-100"
-              >
-                Close
-              </button>
-            </div>
-
-            <ul className="space-y-2">
-              {selected.beds.map((bed) => (
-                <li
-                  key={bed.bedId}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-2.5"
-                >
-                  <span className="font-medium">
-                    Bed {selected.roomNumber}-{bed.bedLabel}
-                  </span>
-                  <span className="flex items-center gap-2 text-sm">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: BED_STATUS_STYLE[bed.status].fill }}
-                      aria-hidden
-                    />
-                    {BED_STATUS_STYLE[bed.status].label}
-                  </span>
-                </li>
-              ))}
-            </ul>
-
-            <p className="mt-4 text-xs text-slate-400">
-              Browse-only for now. Requesting a bed arrives in Phase 4.
-            </p>
-          </section>
-        )}
       </div>
+
+      {selected && (
+        <RoomPopover
+          room={selected}
+          allocation={allocation}
+          canRequest={canRequest}
+          busyBedId={busyBedId}
+          error={actionError}
+          onRequest={(bedId) => void onRequest(bedId)}
+          onCancel={(requestId) => void onCancel(requestId)}
+          onClose={() => {
+            setSelected(null);
+            setActionError(null);
+          }}
+        />
+      )}
     </main>
   );
 }

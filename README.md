@@ -7,8 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 3 (floor map) complete.** Sign in, browse all 6 wings and 404 rooms,
-> and see every bed's status colour-coded. Read-only — requesting a bed arrives in Phase 4.
+> **Current status: Phase 4 (request flow) complete.** Sign in as the student, click any room, and
+> request a free bed. Two students cannot take the same bed, and one student cannot hold two — both
+> enforced by Postgres itself, not by application code. Admin approval arrives in Phase 5.
 
 ## Demo accounts
 
@@ -185,6 +186,53 @@ docker exec hostelops-db psql -U hostelops -d hostelops -c "DELETE FROM bed_clai
 Nothing is cached: the next map request recomputes every status from `bed_claims` via the
 `bed_status` view. That is the point of deriving status rather than storing it.
 
+### Requesting a bed, and the two indexes
+
+```bash
+STUDENT=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"student@hostelops.demo","password":"Student@123"}' | jq -r .accessToken)
+
+BED=$(docker exec hostelops-db psql -U hostelops -d hostelops -tAc \
+  "SELECT b.id FROM beds b JOIN rooms r ON r.id=b.room_id WHERE r.room_number=113 AND b.bed_label='A';")
+
+curl -s -X POST $B/api/requests -H "Authorization: Bearer $STUDENT" \
+  -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  -d "{\"bedId\":$BED}" | jq          # 201, status PENDING
+
+curl -s $B/api/me/allocation -H "Authorization: Bearer $STUDENT" | jq
+```
+
+**Index 2 — one live claim per student.** Ask for a second, different bed:
+
+```
+409  {"code":"STUDENT_ALREADY_HAS_CLAIM", ...}
+```
+
+**Index 1 — one live claim per bed.** A different student asking for the same bed:
+
+```
+409  {"code":"BED_NOT_AVAILABLE","message":"That bed was just taken. Pick another one."}
+```
+
+Neither rejection comes from an `if` in the service. There is no "is this bed free?" check anywhere
+in the request path, deliberately: between such a check and the insert, another transaction can slip
+in, so the check would pass and the insert would fail anyway — it would only move the failure
+somewhere less obvious while creating the illusion of safety. The unique index is evaluated at the
+moment of writing, which is the only moment that can be authoritative.
+
+**Idempotency.** The same `Idempotency-Key` twice returns `201` then `200`, and writes one row. A
+double-clicked button is not two requests.
+
+**Cancelling** frees both the bed and the student, and keeps the row as history:
+
+```bash
+curl -s -X DELETE $B/api/requests/<id> -H "Authorization: Bearer $STUDENT"   # 200, alreadyHandled:false
+curl -s -X DELETE $B/api/requests/<id> -H "Authorization: Bearer $STUDENT"   # 200, alreadyHandled:true
+```
+
+Nothing has to "unstick" the bed. The cancelled row simply drops out of the index's `WHERE` clause,
+and the status is derived fresh from whatever rows remain.
+
 ---
 
 ## Troubleshooting
@@ -245,7 +293,8 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # unit + web-layer tests (no database required)
+./mvnw test                  # 50 tests. Needs Docker: the concurrency tests run against a
+                             # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
 # Frontend
@@ -339,7 +388,7 @@ HostelOps/
 │       │   └── HostelOpsApplication.java
 │       └── resources/
 │           ├── application.yml
-│           ├── db/migration/           V1__core_tables.sql, V2__bed_status_view.sql
+│           ├── db/migration/           V1 tables · V2 bed_status view · V3 the two indexes
 │           └── seed/                   rooms.json (404) + wings-summary.json (6 wings)
 └── frontend/
     └── src/
@@ -387,9 +436,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 0 | Architecture contract | done |
 | 1 | Bootstrap — scaffolds, Postgres, health check | done |
 | 2 | Auth + roles (Student, Admin, Guest) | done |
-| 3 | Floor map (read-only) | **done** |
-| 4 | Request flow + the two partial unique indexes | next |
-| 5 | Admin approve / reject / block | |
+| 3 | Floor map (read-only) | done |
+| 4 | Request flow + the two partial unique indexes | **done** |
+| 5 | Admin approve / reject / block | next |
 | 6 | Auto-expiry of stale requests | |
 | 7 | WebSocket real-time updates | |
 | 8 | Dashboards | |

@@ -131,3 +131,51 @@ export interface WingSummary {
   totalRooms: number;
   totalBeds: number;
 }
+
+// ─────────────────────────── Requests (Phase 4) ───────────────────────────
+
+/** Mirrors `com.hostelops.claim.ClaimStatus`. */
+export type ClaimStatus =
+  | 'PENDING'
+  | 'ALLOCATED'
+  | 'BLOCKED'
+  | 'REJECTED'
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'UNBLOCKED';
+
+/**
+ * Mirrors `ClaimDto` — the student's own claim, returned only to that student.
+ *
+ * Carries no identity at all, not even their own id: they already know who they are, and a field
+ * that never needs to exist can never leak.
+ */
+export interface Claim {
+  requestId: number;
+  bedId: number;
+  roomNumber: number;
+  bedLabel: string;
+  wing: string;
+  floor: string;
+  roomType: 'Single' | 'Double';
+  bathroomType: 'Attached' | 'Common';
+  status: ClaimStatus;
+  createdAt: string;
+  expiresAt: string | null;
+  decidedAt: string | null;
+  decisionReason: string | null;
+}
+
+/** Mirrors `MyAllocationDto`. */
+export interface MyAllocation {
+  state: 'NONE' | 'PENDING' | 'ALLOCATED';
+  claim: Claim | null;
+}
+
+/** Mirrors `CancelResultDto`. */
+export interface CancelResult {
+  requestId: number;
+  status: ClaimStatus;
+  /** True when it was already cancelled — a success, not a failure. */
+  alreadyHandled: boolean;
+}

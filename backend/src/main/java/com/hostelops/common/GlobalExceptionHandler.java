@@ -95,6 +95,61 @@ public class GlobalExceptionHandler {
                 .body(ApiError.of(ErrorCode.UNAUTHENTICATED));
     }
 
+    /**
+     * No endpoint matches the URL.
+     *
+     * <p>Without this, the catch-all below turned every mistyped or not-yet-built URL into
+     * <strong>500 INTERNAL_ERROR instead of 404</strong> - so a frontend calling an endpoint that
+     * does not exist was told the server is broken, and a genuine 404 was logged as an incident.
+     * Found while testing Phase 5 against a backend that had not been restarted: the admin
+     * endpoints did not exist yet, and the honest 404 arrived as a 500.
+     *
+     * <p>Same shape of mistake as the AccessDeniedException handler above. A catch-all on
+     * {@code Exception} is greedy: it captures Spring's own control-flow exceptions, which are not
+     * bugs at all. Each one that has a correct HTTP status needs claiming explicitly.
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoHandler(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.debug("No endpoint for {}", ex.getResourcePath());
+        return ResponseEntity
+                .status(ErrorCode.NOT_FOUND.status())
+                .body(ApiError.of(ErrorCode.NOT_FOUND, "No such endpoint."));
+    }
+
+    /** Right URL, wrong HTTP verb - e.g. GET on an approve endpoint that only accepts POST. */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleWrongMethod(
+            org.springframework.web.HttpRequestMethodNotSupportedException ex) {
+        log.debug("Method {} not supported here", ex.getMethod());
+        return ResponseEntity
+                .status(ErrorCode.METHOD_NOT_ALLOWED.status())
+                .body(ApiError.of(ErrorCode.METHOD_NOT_ALLOWED));
+    }
+
+    /** Body is absent or not valid JSON at all - a client bug, so 400 rather than 500. */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleUnreadableBody(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        log.debug("Unreadable request body: {}", ex.getMessage());
+        return ResponseEntity
+                .status(ErrorCode.VALIDATION_FAILED.status())
+                .body(ApiError.of(ErrorCode.VALIDATION_FAILED, "Request body is missing or malformed."));
+    }
+
+    /** A path or query value of the wrong type - e.g. /api/requests/abc where a number is expected. */
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleTypeMismatch(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity
+                .status(ErrorCode.VALIDATION_FAILED.status())
+                .body(ApiError.of(ErrorCode.VALIDATION_FAILED,
+                        "'" + ex.getName() + "' must be a valid " +
+                                (ex.getRequiredType() != null
+                                        ? ex.getRequiredType().getSimpleName().toLowerCase() : "value")
+                                + "."));
+    }
+
     /** Anything unanticipated: a real bug. */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception ex) {

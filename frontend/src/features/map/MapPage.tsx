@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../../api/client';
+import { blockBed, unblockBed } from '../../api/admin';
 import { getFloor, listWings } from '../../api/rooms';
 import { cancelRequest, myAllocation as fetchMyAllocation, requestBed } from '../../api/requests';
 import type { FloorRooms, MyAllocation, RoomCell, WingSummary } from '../../api/types';
@@ -18,6 +19,7 @@ export function MapPage() {
   const { user } = useAuth();
   const canRequest = usePermission('REQUEST_CREATE');
   const canReadOwn = usePermission('ALLOCATION_READ_OWN');
+  const canBlock = usePermission('BED_BLOCK');
 
   const [wings, setWings] = useState<WingSummary[]>([]);
   const [wing, setWing] = useState('A');
@@ -151,6 +153,47 @@ export function MapPage() {
     [refresh],
   );
 
+  const onBlock = useCallback(
+    async (bedId: number) => {
+      setBusyBedId(bedId);
+      setActionError(null);
+      try {
+        const result = await blockBed(bedId);
+        setBanner(
+          result.autoRejectedRequestId
+            ? `Bed ${result.roomNumber}-${result.bedLabel} blocked. The pending request on it was ` +
+              `rejected automatically and the student was told why.`
+            : `Bed ${result.roomNumber}-${result.bedLabel} is out of service.`,
+        );
+        await refresh();
+      } catch (e: unknown) {
+        setActionError(e instanceof ApiError ? e.message : 'Could not block that bed.');
+        await refresh();
+      } finally {
+        setBusyBedId(null);
+      }
+    },
+    [refresh],
+  );
+
+  const onUnblock = useCallback(
+    async (bedId: number) => {
+      setBusyBedId(bedId);
+      setActionError(null);
+      try {
+        const result = await unblockBed(bedId);
+        setBanner(`Bed ${result.roomNumber}-${result.bedLabel} is available again.`);
+        await refresh();
+      } catch (e: unknown) {
+        setActionError(e instanceof ApiError ? e.message : 'Could not unblock that bed.');
+        await refresh();
+      } finally {
+        setBusyBedId(null);
+      }
+    },
+    [refresh],
+  );
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
@@ -259,10 +302,13 @@ export function MapPage() {
           room={selected}
           allocation={allocation}
           canRequest={canRequest}
+          canBlock={canBlock}
           busyBedId={busyBedId}
           error={actionError}
           onRequest={(bedId) => void onRequest(bedId)}
           onCancel={(requestId) => void onCancel(requestId)}
+          onBlock={(bedId) => void onBlock(bedId)}
+          onUnblock={(bedId) => void onUnblock(bedId)}
           onClose={() => {
             setSelected(null);
             setActionError(null);

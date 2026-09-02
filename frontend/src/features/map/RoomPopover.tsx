@@ -6,10 +6,13 @@ interface Props {
   room: RoomCell;
   allocation: MyAllocation;
   canRequest: boolean;
+  canBlock: boolean;
   busyBedId: number | null;
   error: string | null;
   onRequest: (bedId: number) => void;
   onCancel: (requestId: number) => void;
+  onBlock: (bedId: number) => void;
+  onUnblock: (bedId: number) => void;
   onClose: () => void;
 }
 
@@ -21,10 +24,13 @@ export function RoomPopover({
   room,
   allocation,
   canRequest,
+  canBlock,
   busyBedId,
   error,
   onRequest,
   onCancel,
+  onBlock,
+  onUnblock,
   onClose,
 }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -119,6 +125,58 @@ export function RoomPopover({
                   >
                     Cancel my request
                   </button>
+                )}
+
+                {/* Admin maintenance actions. An ALLOCATED bed offers neither: evicting an
+                    occupant is a separate workflow and out of scope, so rather than showing a
+                    button that always fails, no button is shown and the reason is stated. */}
+                {canBlock && bed.status === 'AVAILABLE' && (
+                  <button
+                    type="button"
+                    disabled={busyBedId !== null}
+                    onClick={() => onBlock(bed.bedId)}
+                    className="mt-3 w-full rounded-lg border border-red-300 px-4 py-2 text-sm
+                               font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    Block for maintenance
+                  </button>
+                )}
+
+                {canBlock && bed.status === 'PENDING' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busyBedId !== null}
+                      onClick={() => onBlock(bed.bedId)}
+                      className="mt-3 w-full rounded-lg border border-red-300 px-4 py-2 text-sm
+                                 font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                    >
+                      Block for maintenance
+                    </button>
+                    <p className="mt-2 text-xs text-amber-700">
+                      This bed has a pending request. Blocking it will reject that request
+                      automatically and tell the student why.
+                    </p>
+                  </>
+                )}
+
+                {canBlock && bed.status === 'BLOCKED' && (
+                  <button
+                    type="button"
+                    disabled={busyBedId !== null}
+                    onClick={() => onUnblock(bed.bedId)}
+                    className="mt-3 w-full rounded-lg border border-slate-300 px-4 py-2 text-sm
+                               font-medium hover:bg-slate-100 disabled:opacity-60"
+                  >
+                    Return to service
+                  </button>
+                )}
+
+                {canBlock && bed.status === 'ALLOCATED' && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Allocated to a student. Blocking an occupied bed would mean evicting them, which
+                    is a separate workflow and out of scope in this build.
+                  </p>
                 )}
 
                 {canRequest && bed.status === 'AVAILABLE' && iHoldSomething && !isMine && (

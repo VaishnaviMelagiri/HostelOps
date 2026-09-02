@@ -179,3 +179,61 @@ export interface CancelResult {
   /** True when it was already cancelled — a success, not a failure. */
   alreadyHandled: boolean;
 }
+
+// ─────────────────────────── Admin actions (Phase 5) ───────────────────────────
+
+/**
+ * Mirrors `StudentSummaryDto`.
+ *
+ * The only place in the whole API where one person's identity reaches another. An admin cannot
+ * approve a blank request, so this is necessary — and it arrives on this one endpoint only.
+ */
+export interface StudentSummary {
+  id: number;
+  fullName: string;
+  studentCode: string;
+  course: string;
+}
+
+/** Mirrors `PendingQueueRowDto`. */
+export interface PendingQueueRow {
+  requestId: number;
+  student: StudentSummary;
+  wing: string;
+  floor: string;
+  roomNumber: number;
+  bedLabel: string;
+  createdAt: string;
+  expiresAt: string;
+  /** How long it has been waiting, so an admin can see one nearing expiry. */
+  pendingAgeSeconds: number;
+}
+
+/** Mirrors `PendingQueueDto`. */
+export interface PendingQueue {
+  total: number;
+  page: number;
+  size: number;
+  rows: PendingQueueRow[];
+}
+
+/** Mirrors `ResolveResultDto`. */
+export interface ResolveResult {
+  requestId: number;
+  status: ClaimStatus;
+  /** True when it was already in this state — a success, not a failure. */
+  alreadyHandled: boolean;
+  decisionReason: string | null;
+}
+
+/** Mirrors `BedActionResultDto`. */
+export interface BedActionResult {
+  bedId: number;
+  roomNumber: number;
+  bedLabel: string;
+  status: BedStatus;
+  /** The student request cancelled to make the block possible, if there was one. */
+  autoRejectedRequestId: number | null;
+  alreadyHandled: boolean;
+  reason: string | null;
+}

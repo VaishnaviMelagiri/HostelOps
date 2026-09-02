@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { HomePage } from './features/home/HomePage';
+import { AdminQueuePage } from './features/admin/AdminQueuePage';
 import { MapPage } from './features/map/MapPage';
 
 /**
@@ -31,6 +32,15 @@ export function AppRoutes() {
           // permission keeps the rule visible instead of implied.
           <ProtectedRoute requires={['ROOM_READ']}>
             <MapPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute requires={['REQUEST_QUEUE_READ']}>
+            <AdminQueuePage />
           </ProtectedRoute>
         }
       />

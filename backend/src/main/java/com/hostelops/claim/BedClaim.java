@@ -114,6 +114,24 @@ public class BedClaim {
         return claim;
     }
 
+    /**
+     * An admin taking a bed out of circulation.
+     *
+     * <p>No student, and no decidedAt/decidedBy: a block is a row BORN in its state, so the actor
+     * is recorded in createdBy. decidedBy is filled only when someone later lifts it. The database
+     * enforces exactly that shape through ck_claims_owner and ck_claims_decided.
+     */
+    public static BedClaim maintenanceBlock(Bed bed, User admin, String reason) {
+        BedClaim claim = new BedClaim();
+        claim.bed = bed;
+        claim.student = null;
+        claim.createdBy = admin;
+        claim.status = ClaimStatus.BLOCKED;
+        claim.expiresAt = null;
+        claim.decisionReason = reason;
+        return claim;
+    }
+
     public Long getId() {
         return id;
     }

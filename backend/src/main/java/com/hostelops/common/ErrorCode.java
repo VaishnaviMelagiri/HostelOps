@@ -29,6 +29,9 @@ public enum ErrorCode {
     NOT_FOUND(HttpStatus.NOT_FOUND,
             "Not found."),
 
+    METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED,
+            "That action is not available on this endpoint."),
+
     // ---- Reserved for Phases 4-5. Listed now so the vocabulary is fixed up front rather than
     // ---- being invented endpoint by endpoint.
     BED_NOT_AVAILABLE(HttpStatus.CONFLICT,

@@ -107,6 +107,16 @@ export function HomePage() {
             Open the floor map
           </Link>
 
+          {canSeeQueue && (
+            <Link
+              to="/admin"
+              className="mb-4 block rounded-lg border border-amber-300 bg-amber-50 px-4 py-3
+                         text-center font-medium text-amber-900 hover:bg-amber-100"
+            >
+              Review pending requests
+            </Link>
+          )}
+
           <div className="space-y-2">
             <ActionRow label="Request a bed" available={canRequestBed} note="Phase 4" />
             <ActionRow label="Review the pending queue" available={canSeeQueue} note="Phase 5" />

@@ -7,9 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 4 (request flow) complete.** Sign in as the student, click any room, and
-> request a free bed. Two students cannot take the same bed, and one student cannot hold two — both
-> enforced by Postgres itself, not by application code. Admin approval arrives in Phase 5.
+> **Current status: Phase 5 (admin actions) complete.** The full workflow runs end to end: a
+> student requests a bed, an admin approves or rejects it, or blocks the bed for maintenance.
+> Every action is idempotent and safe under concurrency. Auto-expiry of stale requests is Phase 6.
 
 ## Demo accounts
 
@@ -233,6 +233,66 @@ curl -s -X DELETE $B/api/requests/<id> -H "Authorization: Bearer $STUDENT"   # 2
 Nothing has to "unstick" the bed. The cancelled row simply drops out of the index's `WHERE` clause,
 and the status is derived fresh from whatever rows remain.
 
+### Admin: approving, rejecting, blocking
+
+```bash
+ADMIN=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"admin@hostelops.demo","password":"Admin@123"}' | jq -r .accessToken)
+
+# The queue, oldest first - the only endpoint in the API that shows one person's identity
+# to another, because an admin cannot approve a blank request.
+curl -s $B/api/admin/requests -H "Authorization: Bearer $ADMIN" | jq
+
+curl -s -X POST $B/api/admin/requests/<id>/approve -H "Authorization: Bearer $ADMIN"
+# {"requestId":17,"status":"ALLOCATED","alreadyHandled":false}
+```
+
+**Idempotency.** Click approve again:
+
+```
+{"requestId":17,"status":"ALLOCATED","alreadyHandled":true}      200, still one row
+```
+
+Not an error — the outcome the caller wanted has happened. But a *different* terminal state is a
+real conflict, and says so:
+
+```
+POST .../reject on an already-allocated request
+409  {"code":"REQUEST_ALREADY_RESOLVED","details":{"actualStatus":"ALLOCATED"}}
+```
+
+This is what answers *"how do you stop two admins allocating the same room?"* — and note it is **not**
+the partial unique index. That stops two claims existing on one bed; it says nothing about one claim
+being resolved twice, because approval is an `UPDATE`, not an `INSERT`. What makes approval safe is
+the conditional update `WHERE id = ? AND status = 'PENDING'` plus a branch on the affected-row
+count. Both mechanisms exist and they answer different questions.
+
+**Blocking a bed for maintenance:**
+
+```bash
+curl -s -X POST $B/api/admin/beds/<bedId>/block -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' -d '{"reason":"Ceiling leak"}'
+```
+
+If the bed had a pending request, it is auto-rejected in the same transaction and the student is
+told why, rather than left waiting on a bed that will never be approved:
+
+```
+{"status":"BLOCKED","autoRejectedRequestId":18,...}
+# that request -> REJECTED, reason "Bed taken out of circulation for maintenance"
+# the student is immediately free to request elsewhere
+```
+
+Blocking an **allocated** bed is refused, with the reason stated rather than failing silently:
+
+```
+409  {"code":"BED_ALLOCATED_CANNOT_BLOCK","message":"Bed 113-A is allocated to a student.
+      Removing an occupant is a separate eviction workflow and is deliberately out of scope..."}
+```
+
+`unblock` returns the bed to `AVAILABLE`. The block period stays in the table, attributable at both
+ends: `created_by` names the admin who blocked it, `decided_by` the one who lifted it.
+
 ---
 
 ## Troubleshooting
@@ -316,7 +376,7 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # 50 tests. Needs Docker: the concurrency tests run against a
+./mvnw test                  # 65 tests. Needs Docker: the concurrency tests run against a
                              # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
@@ -460,9 +520,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 1 | Bootstrap — scaffolds, Postgres, health check | done |
 | 2 | Auth + roles (Student, Admin, Guest) | done |
 | 3 | Floor map (read-only) | done |
-| 4 | Request flow + the two partial unique indexes | **done** |
-| 5 | Admin approve / reject / block | next |
-| 6 | Auto-expiry of stale requests | |
+| 4 | Request flow + the two partial unique indexes | done |
+| 5 | Admin approve / reject / block | **done** |
+| 6 | Auto-expiry of stale requests | next |
 | 7 | WebSocket real-time updates | |
 | 8 | Dashboards | |
 | 9 | Testing, incl. the two concurrency proofs | |

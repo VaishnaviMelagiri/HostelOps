@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -115,5 +116,24 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.rooms[0].beds[0].studentId").doesNotExist())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("fullName"))));
+    }
+
+    @Test
+    @DisplayName("an unmatched URL returns 404, not 500")
+    void unknownEndpointIs404() throws Exception {
+        // Regression guard. GlobalExceptionHandler has a catch-all on Exception, which used to
+        // swallow Spring's own "no handler found" exception and report a mistyped URL as
+        // 500 INTERNAL_ERROR - telling the client the server was broken when nothing was.
+        mockMvc.perform(get("/api/definitely-not-an-endpoint").with(user(principal(Role.ADMIN))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+    }
+
+    @Test
+    @DisplayName("the right URL with the wrong HTTP method returns 405, not 500")
+    void wrongMethodIs405() throws Exception {
+        mockMvc.perform(post("/api/wings").with(user(principal(Role.ADMIN))))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
     }
 }

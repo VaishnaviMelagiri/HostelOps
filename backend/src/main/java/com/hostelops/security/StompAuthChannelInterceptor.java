@@ -13,6 +13,7 @@ import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Component;
 
 import java.security.Principal;
@@ -106,7 +107,13 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             log.debug("WebSocket connected for user {} ({})", principal.getId(), principal.getRole());
             return message;
 
-        } catch (JwtException | IllegalArgumentException e) {
+        } catch (JwtException | IllegalArgumentException | UsernameNotFoundException e) {
+            // UsernameNotFoundException is listed explicitly: a token whose user has since been
+            // deleted is an authentication failure like any other, but it is neither a JwtException
+            // nor an IllegalArgumentException, so it previously escaped this handler uncaught. The
+            // connection was still refused - the frame failed either way - but it took a different
+            // path, skipping this log line and surfacing an unnormalised exception. Every reason to
+            // refuse a CONNECT should look the same from outside.
             log.debug("Rejecting WebSocket CONNECT: {}", e.getMessage());
             throw new IllegalArgumentException("WebSocket authentication failed");
         }

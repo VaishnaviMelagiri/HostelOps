@@ -7,9 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 8 (dashboards) complete.** Every role has a home: students see their bed
-> and, once both are confirmed, their roommate's name; admins see the live queue, occupancy across
-> all 6 wings, and the beds out of service. Redis and k6 are optional stretch work from here.
+> **Current status: Phase 9 (testing) complete.** 121 tests, including proof under real concurrency
+> that two students cannot take the same bed and two admins cannot allocate the same one twice.
+> Redis and k6 are optional stretch work from here.
 
 ## Demo accounts
 
@@ -440,6 +440,40 @@ either (Spring rewrites it per session, so it cannot be addressed to anyone else
 
 ---
 
+## Tests
+
+```bash
+cd backend && ./mvnw test        # 121 tests, ~40s once the container is up
+```
+
+| area | tests | what is proven |
+|---|---|---|
+| Concurrency | 20 | the two required proofs, plus six more races |
+| Auth & permissions | 35 | sign-in rules, token lifecycle, the permission matrix, subscribe gating |
+| Request / cancel | 23 | the happy path, and every authorization and error branch |
+| Approve / reject | 22 | idempotent repeats vs genuine conflicts, audit trail integrity |
+| Expiry | 9 | overdue freed, allocations never touched, safe on several instances |
+| Roommate privacy | 7 | a name appears only when both beds are confirmed |
+| Map & real-time | 23 | grid layout, identity-free payloads, after-commit publication |
+
+**The two required concurrency proofs:**
+
+```
+12 students request the same bed simultaneously -> exactly one PENDING row
+ 8 admins approve the same request simultaneously -> exactly one ALLOCATED row
+```
+
+Both assert the database state directly, not just the API responses — so even a bug in the service
+layer could not make them pass. Six further races are covered: one student firing eight requests at
+eight beds, approve versus reject, cancel versus approve, approve versus the expiry sweep, two
+expiry sweeps at once, and a repeated Idempotency-Key.
+
+**Everything DB-backed runs against real PostgreSQL** via Testcontainers, never H2. H2 does not
+implement partial unique indexes, so it would create the tables, silently skip the index, pass
+every test and prove nothing — false confidence being worse than no test.
+
+---
+
 ## Troubleshooting
 
 ### `npm run dev` fails with `ENOSPC: System limit for number of file watchers reached`
@@ -521,7 +555,7 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # 87 tests. Needs Docker: the concurrency tests run against a
+./mvnw test                  # 121 tests. Needs Docker: the concurrency tests run against a
                              # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
@@ -669,7 +703,7 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 5 | Admin approve / reject / block | done |
 | 6 | Auto-expiry of stale requests | done |
 | 7 | WebSocket real-time updates | done |
-| 8 | Dashboards | **done** |
-| 9 | Testing, incl. the two concurrency proofs | next |
-| 10–11 | Stretch: Redis cache-aside, k6 load test | |
+| 8 | Dashboards | done |
+| 9 | Testing, incl. the two concurrency proofs | **done** |
+| 10–11 | Stretch: Redis cache-aside, k6 load test | optional |
 | 12–13 | Deployment, resume & interview prep | |

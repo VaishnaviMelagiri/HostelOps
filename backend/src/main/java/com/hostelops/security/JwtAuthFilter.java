@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -94,6 +95,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             // this request is simply not authenticated. DEBUG, not WARN: an expired token during
             // normal use is routine, and logging it loudly would bury real problems.
             log.debug("Rejecting token: {}", e.getMessage());
+            SecurityContextHolder.clearContext();
+        } catch (UsernameNotFoundException e) {
+            // The token is valid but its user is gone - deleted, or renamed to a different email.
+            // Routine for a stale token, so DEBUG. It was previously caught by the generic branch
+            // below and logged as "Unexpected failure", which would make an ordinary stale session
+            // look like an incident in production logs.
+            log.debug("Rejecting token for a user that no longer exists: {}", e.getMessage());
             SecurityContextHolder.clearContext();
         } catch (Exception e) {
             log.warn("Unexpected failure while authenticating a request", e);

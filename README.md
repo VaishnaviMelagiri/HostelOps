@@ -7,9 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 5 (admin actions) complete.** The full workflow runs end to end: a
-> student requests a bed, an admin approves or rejects it, or blocks the bed for maintenance.
-> Every action is idempotent and safe under concurrency. Auto-expiry of stale requests is Phase 6.
+> **Current status: Phase 6 (auto-expiry) complete.** The workflow runs end to end and looks after
+> itself: an unanswered request lapses after a configurable TTL and hands the bed back
+> automatically. Live WebSocket updates are Phase 7.
 
 ## Demo accounts
 
@@ -293,6 +293,50 @@ Blocking an **allocated** bed is refused, with the reason stated rather than fai
 `unblock` returns the bed to `AVAILABLE`. The block period stays in the table, attributable at both
 ends: `created_by` names the admin who blocked it, `decided_by` the one who lifted it.
 
+### Auto-expiry
+
+A `PENDING` request holds a bed — the partial unique index makes it unavailable to everyone else for
+as long as the row is live. Without expiry, one admin going on holiday would take beds out of
+circulation indefinitely, and the mechanism that prevents double-booking would become the thing
+freezing the building. So a request that nobody answers lapses on its own.
+
+Default TTL is 48 hours. To watch it happen instead of waiting two days:
+
+```bash
+HOSTELOPS_REQUEST_TTL=PT20S HOSTELOPS_EXPIRY_SWEEP_INTERVAL=PT5S ./mvnw spring-boot:run
+```
+
+Request a bed, wait half a minute, and the log shows:
+
+```
+Expired 1 stale request(s) after PT20S without a decision
+```
+
+The bed reads `AVAILABLE` again, the student is free to request elsewhere, and the row records what
+happened:
+
+```
+status=EXPIRED  decided_at=<time>  decided_by=NULL  reason="No response from the hostel office in time"
+```
+
+`decided_by` is deliberately `NULL`. Expiry is the one transition no human performs, and
+`ck_claims_decided` encodes exactly that: `EXPIRED` requires a `decided_at` and *forbids* a
+`decided_by`. Inventing a "system user" to fill the column would put a fake row in the users table
+forever.
+
+Two properties worth knowing:
+
+- **Safe on several instances at once.** The sweep reads candidate ids, then expires each one with
+  `WHERE status = 'PENDING'`. If another instance's sweep — or an admin approving — got there first,
+  the update changes nothing. No leader election, no distributed lock: the same conditional-update
+  idea that makes approve and cancel safe, applied to a background job.
+- **The interval affects promptness, not correctness.** Each request carries its own `expires_at`,
+  so a sweep that runs late expires exactly the same rows, just later.
+
+The admin queue shows each request's age and time remaining, turning amber within six hours of the
+deadline and red once past it — so a request about to be swept away is visible rather than vanishing
+mid-read.
+
 ---
 
 ## Troubleshooting
@@ -376,7 +420,7 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # 65 tests. Needs Docker: the concurrency tests run against a
+./mvnw test                  # 74 tests. Needs Docker: the concurrency tests run against a
                              # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
@@ -521,9 +565,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 2 | Auth + roles (Student, Admin, Guest) | done |
 | 3 | Floor map (read-only) | done |
 | 4 | Request flow + the two partial unique indexes | done |
-| 5 | Admin approve / reject / block | **done** |
-| 6 | Auto-expiry of stale requests | next |
-| 7 | WebSocket real-time updates | |
+| 5 | Admin approve / reject / block | done |
+| 6 | Auto-expiry of stale requests | **done** |
+| 7 | WebSocket real-time updates | next |
 | 8 | Dashboards | |
 | 9 | Testing, incl. the two concurrency proofs | |
 | 10–11 | Stretch: Redis cache-aside, k6 load test | |

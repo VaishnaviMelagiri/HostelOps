@@ -72,10 +72,22 @@ hostelops:
     revocation-cleanup-initial-delay: PT1M
 
   request:
-    # How long a PENDING request survives without an admin decision before the Phase 6 sweep
-    # expires it and frees the bed. Set at insert time, so expiry is a plain "expires_at <= now()"
-    # scan rather than per-row arithmetic.
+    # How long a PENDING request survives without an admin decision before the sweep expires it and
+    # frees the bed. Stamped onto the row at insert time, so expiry is a plain
+    # "expires_at <= now()" scan rather than per-row arithmetic.
+    #
+    # ISO-8601 duration format: PT48H = 48 hours, PT5M = 5 minutes, PT30S = 30 seconds.
+    # To watch expiry happen instead of waiting two days:
+    #   HOSTELOPS_REQUEST_TTL=PT30S HOSTELOPS_EXPIRY_SWEEP_INTERVAL=PT10S ./mvnw spring-boot:run
     ttl: ${HOSTELOPS_REQUEST_TTL:PT48H}
+
+  expiry:
+    # How often to look for lapsed requests. This affects only how promptly a bed is freed, never
+    # whether it is: each request carries its own expires_at, so a late sweep expires exactly the
+    # same rows, just later. Five minutes against a 48-hour TTL is generous precision.
+    sweep-interval: ${HOSTELOPS_EXPIRY_SWEEP_INTERVAL:PT5M}
+    # Give the application time to finish starting before the first sweep runs.
+    initial-delay: ${HOSTELOPS_EXPIRY_INITIAL_DELAY:PT30S}
 
   seed:
     # Creates the three demo accounts on startup if absent. Set false for a real deployment.

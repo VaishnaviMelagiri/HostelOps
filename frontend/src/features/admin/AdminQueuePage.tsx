@@ -4,7 +4,7 @@ import { approveRequest, pendingQueue, rejectRequest } from '../../api/admin';
 import { ApiError } from '../../api/client';
 import type { PendingQueue } from '../../api/types';
 import { useAuth } from '../../auth/useAuth';
-import { formatAge, formatDateTime, formatTimeUntil } from '../../lib/format';
+import { formatAge, formatDateTime, formatTimeUntil, urgency } from '../../lib/format';
 
 /**
  * The admin pending-requests queue.
@@ -87,7 +87,8 @@ export function AdminQueuePage() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Pending requests</h1>
             <p className="text-xs text-slate-500">
-              {queue ? `${queue.total} waiting` : 'loading…'} · oldest first
+                  {queue ? `${queue.total} waiting` : 'loading…'} · oldest first · unanswered requests
+              expire automatically
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -134,7 +135,13 @@ export function AdminQueuePage() {
           queue?.rows.map((row) => (
             <article
               key={row.requestId}
-              className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+              className={`rounded-xl border bg-white p-5 shadow-sm ${
+                urgency(row.expiresAt) === 'expired'
+                  ? 'border-red-300'
+                  : urgency(row.expiresAt) === 'soon'
+                    ? 'border-amber-300'
+                    : 'border-slate-200'
+              }`}
             >
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
@@ -156,12 +163,16 @@ export function AdminQueuePage() {
                   <p>waiting {formatAge(row.pendingAgeSeconds)}</p>
                   <p
                     className={
-                      formatTimeUntil(row.expiresAt) === 'expired'
+                      urgency(row.expiresAt) === 'expired'
                         ? 'font-semibold text-red-600'
-                        : ''
+                        : urgency(row.expiresAt) === 'soon'
+                          ? 'font-semibold text-amber-700'
+                          : ''
                     }
                   >
-                    expires in {formatTimeUntil(row.expiresAt)}
+                    {urgency(row.expiresAt) === 'expired'
+                      ? 'past its deadline — the next sweep will free this bed'
+                      : `expires in ${formatTimeUntil(row.expiresAt)}`}
                   </p>
                 </div>
               </div>

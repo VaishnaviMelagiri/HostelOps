@@ -28,3 +28,22 @@ export function formatDateTime(iso: string): string {
     minute: '2-digit',
   });
 }
+
+/** Seconds until an instant; negative once it has passed. */
+export function secondsUntil(iso: string | null): number {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  return (new Date(iso).getTime() - Date.now()) / 1000;
+}
+
+/**
+ * How urgent a pending request is.
+ *
+ * A request nearing its TTL is about to be expired by the sweep and the bed handed back — an admin
+ * should see that coming rather than watch a row vanish while they read the list.
+ */
+export function urgency(expiresAt: string | null): 'expired' | 'soon' | 'normal' {
+  const seconds = secondsUntil(expiresAt);
+  if (seconds <= 0) return 'expired';
+  if (seconds <= 6 * 3600) return 'soon';
+  return 'normal';
+}

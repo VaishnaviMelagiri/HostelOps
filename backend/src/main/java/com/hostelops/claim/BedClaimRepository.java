@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -176,4 +177,53 @@ public interface BedClaimRepository extends JpaRepository<BedClaim, Long> {
                               @Param("admin") com.hostelops.user.User admin,
                               @Param("now") Instant now,
                               @Param("reason") String reason);
+
+    // ─────────────────────────── Phase 6: auto-expiry ───────────────────────────
+
+    /**
+     * Ids of PENDING requests whose deadline has passed.
+     *
+     * <p>Reads only ids, and only from {@code idx_claims_pending_expiry} - a partial index holding
+     * nothing but pending rows. However large the history grows, this scan stays proportional to
+     * the number of requests currently waiting, not to the size of the table.
+     *
+     * <p>Limited by the Pageable so one sweep cannot lock thousands of rows at once if a backlog
+     * ever builds up; whatever it misses is simply picked up by the next sweep a few minutes later.
+     */
+    @Query("""
+            SELECT c.id FROM BedClaim c
+            WHERE c.status = com.hostelops.claim.ClaimStatus.PENDING
+              AND c.expiresAt <= :now
+            ORDER BY c.expiresAt ASC
+            """)
+    List<Long> findExpiredPendingIds(@Param("now") Instant now, Pageable limit);
+
+    /**
+     * Expires one request, only if it is still pending.
+     *
+     * <p>Conditional for the same reason approve and cancel are: between selecting the candidates
+     * above and updating them, an admin may have approved one, or a second application instance
+     * running its own sweep may have expired it. The predicate means each row is claimed by exactly
+     * one transaction - no leader election, no distributed lock, no rows expired twice.
+     *
+     * <p>Note {@code decidedBy} is deliberately left NULL. EXPIRED is the one transition no human
+     * performs, and {@code ck_claims_decided} encodes exactly that: EXPIRED requires a decidedAt
+     * and forbids a decidedBy. Inventing a "system user" to fill the column would put a fake row in
+     * the users table forever.
+     *
+     * @return 1 if this call expired the request, 0 if someone else resolved it first
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE BedClaim c
+               SET c.status = com.hostelops.claim.ClaimStatus.EXPIRED,
+                   c.decidedAt = :now,
+                   c.decisionReason = :reason,
+                   c.expiresAt = NULL
+             WHERE c.id = :claimId
+               AND c.status = com.hostelops.claim.ClaimStatus.PENDING
+            """)
+    int expireIfStillPending(@Param("claimId") Long claimId,
+                             @Param("now") Instant now,
+                             @Param("reason") String reason);
 }

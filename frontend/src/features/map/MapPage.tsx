@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { blockBed, unblockBed } from '../../api/admin';
@@ -7,6 +7,10 @@ import { cancelRequest, myAllocation as fetchMyAllocation, requestBed } from '..
 import type { FloorRooms, MyAllocation, RoomCell, WingSummary } from '../../api/types';
 import { useAuth } from '../../auth/useAuth';
 import { usePermission } from '../../auth/usePermission';
+import type { BedStatusChanged, RequestResolved } from '../../realtime/events';
+import { useConnectionState } from '../../realtime/useConnectionState';
+import { useFloorTopic } from '../../realtime/useFloorTopic';
+import { useMyRequests } from '../../realtime/useMyRequests';
 import { FloorMap } from './FloorMap';
 import { Legend } from './Legend';
 import { RoomPopover } from './RoomPopover';
@@ -20,6 +24,7 @@ export function MapPage() {
   const canRequest = usePermission('REQUEST_CREATE');
   const canReadOwn = usePermission('ALLOCATION_READ_OWN');
   const canBlock = usePermission('BED_BLOCK');
+  const liveConnected = useConnectionState();
 
   const [wings, setWings] = useState<WingSummary[]>([]);
   const [wing, setWing] = useState('A');
@@ -194,13 +199,102 @@ export function MapPage() {
     [refresh],
   );
 
+  /**
+   * PUBLIC channel: someone, somewhere, changed a bed on the floor being viewed.
+   *
+   * Patched into local state rather than refetching the whole floor. The message carries the bed's
+   * new status AND the recomputed room roll-up, which is everything needed to repaint one cell —
+   * so a busy floor does not trigger a request per event. Nothing here is trusted for correctness:
+   * any action the user takes still refetches, and a reconnect refetches too.
+   */
+  const onBedStatusChanged = useCallback((event: BedStatusChanged) => {
+    setFloorData((current) => {
+      if (!current || current.wing !== event.wing || current.floor !== event.floor) return current;
+      return {
+        ...current,
+        rooms: current.rooms.map((room) =>
+          room.roomId !== event.roomId
+            ? room
+            : {
+                ...room,
+                roomStatus: event.roomStatus,
+                beds: room.beds.map((bed) =>
+                  bed.bedId === event.bedId ? { ...bed, status: event.status } : bed,
+                ),
+              },
+        ),
+      };
+    });
+
+    // Keep an open popover in step with the map behind it.
+    setSelected((current) =>
+      !current || current.roomId !== event.roomId
+        ? current
+        : {
+            ...current,
+            roomStatus: event.roomStatus,
+            beds: current.beds.map((bed) =>
+              bed.bedId === event.bedId ? { ...bed, status: event.status } : bed,
+            ),
+          },
+    );
+  }, []);
+
+  useFloorTopic(wing, floor, onBedStatusChanged);
+
+  /**
+   * PRIVATE channel: this student's own request was decided by someone else.
+   *
+   * The allocation is refetched rather than reconstructed from the message. The message says what
+   * happened; the server remains the authority on what the student now holds.
+   */
+  const onMyRequestResolved = useCallback(
+    (event: RequestResolved) => {
+      const bed = `${event.roomNumber}-${event.bedLabel}`;
+      const text =
+        event.status === 'ALLOCATED'
+          ? `Approved — bed ${bed} is yours.`
+          : event.status === 'REJECTED'
+            ? `Your request for bed ${bed} was rejected. ${event.reason ?? ''}`.trim()
+            : event.status === 'EXPIRED'
+              ? `Your request for bed ${bed} expired. ${event.reason ?? ''}`.trim()
+              : `Your request for bed ${bed} is now ${event.status.toLowerCase()}.`;
+      setBanner(text);
+      void loadAllocation();
+    },
+    [loadAllocation],
+  );
+
+  useMyRequests(canReadOwn, onMyRequestResolved);
+
+  /**
+   * A dropped socket means the page may be stale, so refetch on reconnect rather than assuming
+   * nothing happened while it was down.
+   */
+  const wasConnected = useRef(liveConnected);
+  useEffect(() => {
+    if (liveConnected && !wasConnected.current) {
+      void refresh();
+    }
+    wasConnected.current = liveConnected;
+  }, [liveConnected, refresh]);
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Floor map</h1>
-            <p className="text-xs text-slate-500">404 rooms · 576 beds · 6 wings</p>
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              404 rooms · 576 beds · 6 wings
+              <span
+                className={`ml-1 inline-block h-1.5 w-1.5 rounded-full ${
+                  liveConnected ? 'bg-status-available' : 'bg-slate-300'
+                }`}
+                aria-hidden
+              />
+              {liveConnected ? 'live' : 'reconnecting…'}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {user && (

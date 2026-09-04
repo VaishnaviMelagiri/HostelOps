@@ -7,9 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 6 (auto-expiry) complete.** The workflow runs end to end and looks after
-> itself: an unanswered request lapses after a configurable TTL and hands the bed back
-> automatically. Live WebSocket updates are Phase 7.
+> **Current status: Phase 7 (real-time) complete.** Open two tabs — student and admin — and watch
+> the map repaint and the student get notified the instant the admin acts, with no refresh.
+> Dashboards are Phase 8.
 
 ## Demo accounts
 
@@ -34,7 +34,8 @@ list on the home page change — no code anywhere branches on the role name.
 | Frontend | React 18 · Vite 6 · TypeScript 5 · Tailwind CSS 3 · React Router 6 |
 | Backend | Spring Boot 3.5 · Java 17 · Spring Security + JWT (jjwt) · Maven (wrapper) |
 | Database | PostgreSQL 16 (Docker) · Flyway migrations |
-| Later | WebSocket/STOMP (P7) · Redis, k6 (stretch) |
+| Real-time | Spring WebSocket + STOMP · @stomp/stompjs |
+| Later | Redis, k6 (stretch) |
 
 ---
 
@@ -337,6 +338,52 @@ The admin queue shows each request's age and time remaining, turning amber withi
 deadline and red once past it — so a request about to be swept away is visible rather than vanishing
 mid-read.
 
+### Real-time updates
+
+**The two-tab demo.** Sign in as the student in one browser tab and the admin in another (use a
+private window for the second, since the token is per-tab). Put the student on the floor map and
+the admin on the pending queue:
+
+1. Student requests a bed → the bed turns amber **on both tabs at once**.
+2. Admin approves → the bed turns blue on both, and a banner appears on the student's tab:
+   *"Approved — bed 113-A is yours."*
+3. Admin blocks a bed → it turns red everywhere instantly.
+
+Nobody refreshes anything. There is a small `live` dot in the map header showing the connection
+state; if the socket drops it reads `reconnecting…`, and the page refetches when it comes back.
+
+**Two channels, two audiences:**
+
+| destination | who receives it | carries |
+|---|---|---|
+| `/topic/floors/{wing}-{floor}` | anyone browsing that floor | bed status changes |
+| `/user/queue/requests` | one student, their own requests only | approved / rejected / expired |
+
+The public message has **no student field of any kind** — not omitted at send time, but absent from
+the type, so there is nothing capable of carrying an identity to a broadcast audience. The private
+message carries no roommate name either; when Phase 8 adds roommate visibility it will send a flag
+telling the client to refetch over authenticated REST, because names should not travel on a
+transport whose job is broadcasting.
+
+**Per-user isolation is structural, and was verified rather than assumed.** Two students both
+subscribed to the identical string `/user/queue/requests`; Spring rewrites it per session before it
+reaches the broker. The bystander received both public messages and **zero** private ones. There is
+no destination another student could guess.
+
+**Every message is published after the database commit**, via
+`@TransactionalEventListener(phase = AFTER_COMMIT)`. Publishing inside the transaction would mean a
+later rollback leaves every connected browser showing a bed status that does not exist — with
+nothing to ever correct it, because a rollback is silent. `RealtimeEventTest` proves it: a request
+that loses the unique-index race announces nothing at all.
+
+WebSocket is an optimisation for liveness, never the source of truth. Every action still refetches,
+a reconnect refetches, and the REST API works unchanged if the socket never connects at all.
+
+**Known gap:** the admin *queue* page does not update live — it has a Refresh button. The Phase 0
+contract defines two channels and neither is "all pending requests", so adding a third was outside
+what was agreed. The map does update live for admins, since they subscribe to the floor topic like
+anyone else.
+
 ---
 
 ## Troubleshooting
@@ -420,7 +467,7 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # 74 tests. Needs Docker: the concurrency tests run against a
+./mvnw test                  # 80 tests. Needs Docker: the concurrency tests run against a
                              # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
@@ -566,9 +613,9 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 3 | Floor map (read-only) | done |
 | 4 | Request flow + the two partial unique indexes | done |
 | 5 | Admin approve / reject / block | done |
-| 6 | Auto-expiry of stale requests | **done** |
-| 7 | WebSocket real-time updates | next |
-| 8 | Dashboards | |
+| 6 | Auto-expiry of stale requests | done |
+| 7 | WebSocket real-time updates | **done** |
+| 8 | Dashboards | next |
 | 9 | Testing, incl. the two concurrency proofs | |
 | 10–11 | Stretch: Redis cache-aside, k6 load test | |
 | 12–13 | Deployment, resume & interview prep | |

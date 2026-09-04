@@ -99,6 +99,14 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
                     // Browsers send a preflight OPTIONS with no Authorization header by design.
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                    // The WebSocket HANDSHAKE is permitted, and that is not a hole. The browser
+                    // WebSocket API cannot set an Authorization header on the handshake request -
+                    // there is simply no API for it - so the token travels in the first STOMP
+                    // frame instead, where StompAuthChannelInterceptor verifies it and refuses to
+                    // establish the session without a valid one. Authentication moves one layer
+                    // up rather than being skipped.
+                    .requestMatchers("/ws/**").permitAll()
                     // Everything else requires a valid token. Note this is deny-by-default: a new
                     // endpoint is protected the moment it exists, without anyone remembering to
                     // add it here.

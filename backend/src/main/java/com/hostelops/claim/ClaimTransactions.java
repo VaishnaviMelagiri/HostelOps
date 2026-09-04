@@ -4,11 +4,15 @@ import com.hostelops.claim.dto.CancelResultDto;
 import com.hostelops.claim.dto.ClaimDto;
 import com.hostelops.common.DomainException;
 import com.hostelops.common.ErrorCode;
+import com.hostelops.realtime.ClaimStateChangedEvent;
+import com.hostelops.realtime.payload.ChangeCause;
 import com.hostelops.room.Bed;
 import com.hostelops.room.BedRepository;
+import com.hostelops.room.dto.BedStatus;
 import com.hostelops.user.User;
 import com.hostelops.user.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,15 +45,18 @@ public class ClaimTransactions {
     private final BedClaimRepository claimRepository;
     private final BedRepository bedRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher events;
     private final Duration requestTtl;
 
     public ClaimTransactions(BedClaimRepository claimRepository,
                              BedRepository bedRepository,
                              UserRepository userRepository,
+                             ApplicationEventPublisher events,
                              @Value("${hostelops.request.ttl:PT48H}") Duration requestTtl) {
         this.claimRepository = claimRepository;
         this.bedRepository = bedRepository;
         this.userRepository = userRepository;
+        this.events = events;
         this.requestTtl = requestTtl;
     }
 
@@ -80,6 +87,15 @@ public class ClaimTransactions {
             // INSERT to commit time, and the exception would surface after this method returned -
             // too late for this try/catch, and reported as a generic 500.
             BedClaim saved = claimRepository.saveAndFlush(claim);
+
+            // Announce it. Published INSIDE the transaction but delivered only after it commits -
+            // see RealtimePublisher. The student who made the request is not notified privately:
+            // they are looking at the response to their own click.
+            events.publishEvent(ClaimStateChangedEvent.byStudent(
+                    saved.getId(), bed.getId(), bed.getRoom().getId(), bed.getRoom().getRoomNumber(),
+                    bed.getRoom().getWing(), bed.getRoom().getFloor(), bed.getBedLabel(),
+                    BedStatus.PENDING, ClaimStatus.PENDING, ChangeCause.REQUESTED, studentId));
+
             return ClaimDto.from(saved);
         } catch (DataIntegrityViolationException e) {
             throw ClaimConstraints.translate(e, bedId);
@@ -106,11 +122,9 @@ public class ClaimTransactions {
      */
     @Transactional
     public CancelResultDto cancelOwnRequest(Long studentId, Long claimId) {
-        int updated = claimRepository.cancelIfStillPending(claimId, studentId, Instant.now());
-        if (updated == 1) {
-            return new CancelResultDto(claimId, ClaimStatus.CANCELLED, false);
-        }
-
+        // Read first, so the bed's details are in hand for the event if the cancel succeeds. This
+        // read does NOT make the operation unsafe: the update below is still conditional, so an
+        // admin approving in the gap between the two simply causes it to change nothing.
         BedClaim claim = claimRepository.findByIdWithBed(claimId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND,
                         "No such request.", Map.of("requestId", claimId)));
@@ -122,15 +136,32 @@ public class ClaimTransactions {
             throw new DomainException(ErrorCode.FORBIDDEN, "That request is not yours.");
         }
 
+        Bed bed = claim.getBed();
+        var room = bed.getRoom();
+
+        if (claimRepository.cancelIfStillPending(claimId, studentId, Instant.now()) == 1) {
+            events.publishEvent(ClaimStateChangedEvent.byStudent(
+                    claimId, bed.getId(), room.getId(), room.getRoomNumber(),
+                    room.getWing(), room.getFloor(), bed.getBedLabel(),
+                    BedStatus.AVAILABLE, ClaimStatus.CANCELLED, ChangeCause.CANCELLED, studentId));
+            return new CancelResultDto(claimId, ClaimStatus.CANCELLED, false);
+        }
+
+        // Nothing changed. Re-read to report why - the clearAutomatically on the update detached
+        // the copy above, and something else resolved this request in the meantime.
+        ClaimStatus actual = claimRepository.findByIdWithBed(claimId)
+                .map(BedClaim::getStatus)
+                .orElse(ClaimStatus.CANCELLED);
+
         // Already cancelled: the caller's intent is satisfied, so this is a success, not an error.
-        if (claim.getStatus() == ClaimStatus.CANCELLED) {
+        if (actual == ClaimStatus.CANCELLED) {
             return new CancelResultDto(claimId, ClaimStatus.CANCELLED, true);
         }
 
         // A different terminal state - an admin approved or rejected it while the student clicked.
         // Whoever committed first wins; this call reports honestly what actually happened.
         throw new DomainException(ErrorCode.REQUEST_ALREADY_RESOLVED,
-                "That request was already " + claim.getStatus().name().toLowerCase() + ".",
-                Map.of("requestId", claimId, "actualStatus", claim.getStatus().name()));
+                "That request was already " + actual.name().toLowerCase() + ".",
+                Map.of("requestId", claimId, "actualStatus", actual.name()));
     }
 }

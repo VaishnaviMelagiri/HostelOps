@@ -6,13 +6,17 @@ import com.hostelops.claim.dto.PendingQueueRowDto;
 import com.hostelops.claim.dto.ResolveResultDto;
 import com.hostelops.common.DomainException;
 import com.hostelops.common.ErrorCode;
+import com.hostelops.realtime.ClaimStateChangedEvent;
+import com.hostelops.realtime.payload.ChangeCause;
 import com.hostelops.room.Bed;
 import com.hostelops.room.BedRepository;
+import com.hostelops.room.Room;
 import com.hostelops.room.dto.BedStatus;
 import com.hostelops.user.User;
 import com.hostelops.user.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -44,13 +48,16 @@ public class AdminClaimService {
     private final BedClaimRepository claimRepository;
     private final BedRepository bedRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher events;
 
     public AdminClaimService(BedClaimRepository claimRepository,
                              BedRepository bedRepository,
-                             UserRepository userRepository) {
+                             UserRepository userRepository,
+                             ApplicationEventPublisher events) {
         this.claimRepository = claimRepository;
         this.bedRepository = bedRepository;
         this.userRepository = userRepository;
+        this.events = events;
     }
 
     @Transactional(readOnly = true)
@@ -87,18 +94,41 @@ public class AdminClaimService {
         User admin = userRepository.getReferenceById(adminId);
         Instant now = Instant.now();
 
+        // Read before writing so the bed details and student id are available for the event. The
+        // update stays conditional, so this read introduces no race - if the student cancels in
+        // the gap, the update simply changes nothing and the code below reports that truthfully.
+        BedClaim claim = claimRepository.findByIdWithBed(requestId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND,
+                        "No such request.", Map.of("requestId", requestId)));
+        Bed bed = claim.getBed();
+        Room room = bed.getRoom();
+        Long studentId = claim.getStudent() != null ? claim.getStudent().getId() : null;
+
         int updated = (target == ClaimStatus.ALLOCATED)
                 ? claimRepository.approveIfStillPending(requestId, admin, now)
                 : claimRepository.rejectIfStillPending(requestId, admin, now, reason);
 
         if (updated == 1) {
             log.info("Admin {} set request {} to {}", adminId, requestId, target);
+
+            // An approval leaves the bed ALLOCATED; a rejection hands it straight back.
+            BedStatus bedStatus = (target == ClaimStatus.ALLOCATED)
+                    ? BedStatus.ALLOCATED : BedStatus.AVAILABLE;
+            ChangeCause cause = (target == ClaimStatus.ALLOCATED)
+                    ? ChangeCause.APPROVED : ChangeCause.REJECTED;
+
+            // Done TO the student by someone else, so they do get a private notification.
+            events.publishEvent(ClaimStateChangedEvent.affectingStudent(
+                    requestId, bed.getId(), room.getId(), room.getRoomNumber(),
+                    room.getWing(), room.getFloor(), bed.getBedLabel(),
+                    bedStatus, target, cause, studentId, reason));
+
             return new ResolveResultDto(requestId, target, false, reason);
         }
 
-        // Zero rows changed. Read the row back to say WHY, because the reasons are genuinely
-        // different and an admin needs to be able to tell them apart.
-        BedClaim claim = claimRepository.findByIdWithBed(requestId)
+        // Zero rows changed. Re-read to say WHY, because the reasons are genuinely different and
+        // an admin needs to be able to tell them apart. (The update cleared the context above.)
+        claim = claimRepository.findByIdWithBed(requestId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND,
                         "No such request.", Map.of("requestId", requestId)));
 
@@ -159,6 +189,9 @@ public class AdminClaimService {
                 }
 
                 case PENDING -> {
+                    Long displacedStudentId =
+                            existing.getStudent() != null ? existing.getStudent().getId() : null;
+
                     // Conditional again, not a blind update: the student may be cancelling at this
                     // very moment, in which case 0 rows change and there was nothing to reject.
                     int rejected = claimRepository.rejectIfStillPending(
@@ -167,6 +200,16 @@ public class AdminClaimService {
                         autoRejectedRequestId = existing.getId();
                         log.info("Auto-rejected request {} because bed {} is being blocked",
                                 existing.getId(), bedId);
+
+                        // Tell that student directly. Losing a bed to maintenance is exactly the
+                        // sort of thing they should not have to discover by re-checking the map.
+                        // The bed status here is BLOCKED, not AVAILABLE - the block lands next.
+                        events.publishEvent(ClaimStateChangedEvent.affectingStudent(
+                                existing.getId(), bed.getId(), bed.getRoom().getId(),
+                                bed.getRoom().getRoomNumber(), bed.getRoom().getWing(),
+                                bed.getRoom().getFloor(), bed.getBedLabel(),
+                                BedStatus.BLOCKED, ClaimStatus.REJECTED, ChangeCause.BLOCKED,
+                                displacedStudentId, BLOCKED_SYSTEM_REASON));
                     }
                 }
 
@@ -185,6 +228,12 @@ public class AdminClaimService {
         }
 
         log.info("Admin {} blocked bed {} ({})", adminId, bedId, reason);
+
+        events.publishEvent(ClaimStateChangedEvent.bedOnly(
+                null, bed.getId(), bed.getRoom().getId(), bed.getRoom().getRoomNumber(),
+                bed.getRoom().getWing(), bed.getRoom().getFloor(), bed.getBedLabel(),
+                BedStatus.BLOCKED, ChangeCause.BLOCKED, reason));
+
         return result(bed, BedStatus.BLOCKED, autoRejectedRequestId, false, reason);
     }
 
@@ -221,6 +270,12 @@ public class AdminClaimService {
         }
 
         log.info("Admin {} unblocked bed {}", adminId, bedId);
+
+        events.publishEvent(ClaimStateChangedEvent.bedOnly(
+                existing.getId(), bed.getId(), bed.getRoom().getId(), bed.getRoom().getRoomNumber(),
+                bed.getRoom().getWing(), bed.getRoom().getFloor(), bed.getBedLabel(),
+                BedStatus.AVAILABLE, ChangeCause.UNBLOCKED, reason));
+
         return result(bed, BedStatus.AVAILABLE, null, false, reason);
     }
 

@@ -2,9 +2,14 @@ package com.hostelops.expiry;
 
 import com.hostelops.claim.BedClaim;
 import com.hostelops.claim.BedClaimRepository;
+import com.hostelops.claim.ClaimStatus;
+import com.hostelops.realtime.ClaimStateChangedEvent;
+import com.hostelops.realtime.payload.ChangeCause;
+import com.hostelops.room.dto.BedStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,11 +51,14 @@ public class ClaimExpiryService {
     private static final int MAX_PER_SWEEP = 500;
 
     private final BedClaimRepository claimRepository;
+    private final ApplicationEventPublisher events;
     private final Duration requestTtl;
 
     public ClaimExpiryService(BedClaimRepository claimRepository,
+                              ApplicationEventPublisher events,
                               @Value("${hostelops.request.ttl:PT48H}") Duration requestTtl) {
         this.claimRepository = claimRepository;
+        this.events = events;
         this.requestTtl = requestTtl;
     }
 
@@ -83,8 +91,19 @@ public class ClaimExpiryService {
         for (Long claimId : candidates) {
             if (claimRepository.expireIfStillPending(claimId, now, EXPIRY_REASON) == 1) {
                 // Re-read only the rows this sweep actually changed, so the returned list is exact
-                // rather than optimistic. Phase 7 sends one WebSocket event per entry.
-                claimRepository.findByIdWithBed(claimId).ifPresent(claim -> expired.add(toRecord(claim)));
+                // rather than optimistic - and so each one can be announced individually.
+                claimRepository.findByIdWithBed(claimId).ifPresent(claim -> {
+                    ExpiredClaim record = toRecord(claim);
+                    expired.add(record);
+
+                    // The bed goes back on the map for everyone, and the student is told their
+                    // request lapsed rather than being left to wonder why it vanished.
+                    events.publishEvent(ClaimStateChangedEvent.affectingStudent(
+                            record.requestId(), record.bedId(), record.roomId(),
+                            record.roomNumber(), record.wing(), record.floor(), record.bedLabel(),
+                            BedStatus.AVAILABLE, ClaimStatus.EXPIRED, ChangeCause.EXPIRED,
+                            record.studentId(), EXPIRY_REASON));
+                });
             }
         }
 
@@ -96,12 +115,17 @@ public class ClaimExpiryService {
     }
 
     private static ExpiredClaim toRecord(BedClaim claim) {
+        var bed = claim.getBed();
+        var room = bed.getRoom();
         return new ExpiredClaim(
                 claim.getId(),
-                claim.getBed().getId(),
+                bed.getId(),
+                room.getId(),
                 claim.getStudent() != null ? claim.getStudent().getId() : null,
-                claim.getBed().getRoom().getRoomNumber(),
-                claim.getBed().getBedLabel());
+                room.getRoomNumber(),
+                room.getWing(),
+                room.getFloor(),
+                bed.getBedLabel());
     }
 
     public Duration requestTtl() {

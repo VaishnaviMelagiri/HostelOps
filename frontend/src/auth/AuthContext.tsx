@@ -9,6 +9,7 @@ import {
 } from 'react';
 import * as authApi from '../api/auth';
 import { setAccessToken, setUnauthenticatedHandler } from '../api/client';
+import { connectStomp, disconnectStomp } from '../realtime/stompClient';
 import type { Permission, User } from '../api/types';
 
 /**
@@ -60,12 +61,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearSession = useCallback(() => {
     setAccessToken(null);
     sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    // Close the live connection too. Leaving it open after sign-out would keep pushing updates to
+    // a page that is no longer signed in, on a session the server authenticated as the old user.
+    disconnectStomp();
     setUser(null);
   }, []);
 
   const applyToken = useCallback((token: string) => {
     setAccessToken(token);
     sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    // Open the WebSocket with the same token. Authentication happens once, in the CONNECT frame.
+    connectStomp(token);
   }, []);
 
   /**
@@ -95,7 +101,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authApi
       .me()
       .then((current) => {
-        if (!cancelled) setUser(current);
+        if (cancelled) return;
+        setUser(current);
+        // Only after /auth/me confirms the stored token is still good. Connecting first would
+        // open a socket with a token the server may already have revoked.
+        connectStomp(stored);
       })
       .catch(() => {
         // Expired or revoked while the tab was closed. Not an error worth showing anyone — just

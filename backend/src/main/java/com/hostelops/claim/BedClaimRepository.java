@@ -226,4 +226,55 @@ public interface BedClaimRepository extends JpaRepository<BedClaim, Long> {
     int expireIfStillPending(@Param("claimId") Long claimId,
                              @Param("now") Instant now,
                              @Param("reason") String reason);
+
+    // ─────────────────────────── Phase 8: roommate visibility ───────────────────────────
+
+    /**
+     * The name and course of whoever holds the OTHER bed in this room - and only if their claim is
+     * ALLOCATED.
+     *
+     * <p>Three guards, all in the query rather than in Java:
+     * <ul>
+     *   <li>{@code b.id <> :myBedId} - never returns the caller themselves.</li>
+     *   <li>{@code c.status = ALLOCATED} - a merely PENDING neighbour returns nothing, which is the
+     *       rule the whole feature turns on. Someone could otherwise request the free bed in a
+     *       room, read the occupant's name, and cancel.</li>
+     *   <li>The SELECT lists two columns. The User entity never reaches the service layer on this
+     *       path, so no later refactor can widen this to an email address by accident - the query
+     *       is physically incapable of returning one.</li>
+     * </ul>
+     *
+     * <p>Returns empty for a Single room too, since there is no other bed to match.
+     */
+    @Query("""
+            SELECT new com.hostelops.claim.dto.RoommateDto(s.fullName, s.course)
+            FROM BedClaim c
+            JOIN c.student s
+            JOIN c.bed b
+            WHERE b.room.id = :roomId
+              AND b.id <> :myBedId
+              AND c.status = com.hostelops.claim.ClaimStatus.ALLOCATED
+            """)
+    Optional<com.hostelops.claim.dto.RoommateDto> findConfirmedRoommate(
+            @Param("roomId") Long roomId, @Param("myBedId") Long myBedId);
+
+    /**
+     * The live status of the other bed in the room, whatever it is.
+     *
+     * <p>Separate from the query above on purpose. This one may say "PENDING" - a fact about a bed,
+     * which is public on the map anyway - while revealing nobody. Combining the two into one query
+     * that returned a name alongside a status would put the identity one careless edit away from
+     * the PENDING case.
+     */
+    @Query("""
+            SELECT c.status FROM BedClaim c
+            JOIN c.bed b
+            WHERE b.room.id = :roomId
+              AND b.id <> :myBedId
+              AND c.status IN (com.hostelops.claim.ClaimStatus.PENDING,
+                               com.hostelops.claim.ClaimStatus.ALLOCATED,
+                               com.hostelops.claim.ClaimStatus.BLOCKED)
+            """)
+    Optional<ClaimStatus> findOtherBedStatus(@Param("roomId") Long roomId,
+                                             @Param("myBedId") Long myBedId);
 }

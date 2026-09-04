@@ -2,8 +2,19 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { HomePage } from './features/home/HomePage';
-import { AdminQueuePage } from './features/admin/AdminQueuePage';
+import { AdminDashboard } from './features/admin/AdminDashboard';
 import { MapPage } from './features/map/MapPage';
+
+/** The admin dashboard on its own page, for the /admin link. */
+function AdminDashboardPage() {
+  return (
+    <main className="min-h-screen bg-slate-50 px-6 py-8 text-slate-900">
+      <div className="mx-auto max-w-4xl">
+        <AdminDashboard />
+      </div>
+    </main>
+  );
+}
 
 /**
  * Route table.
@@ -40,7 +51,7 @@ export function AppRoutes() {
         path="/admin"
         element={
           <ProtectedRoute requires={['REQUEST_QUEUE_READ']}>
-            <AdminQueuePage />
+            <AdminDashboardPage />
           </ProtectedRoute>
         }
       />

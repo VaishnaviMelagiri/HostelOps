@@ -7,9 +7,9 @@ One workflow, done correctly under concurrency, on the real floor plan of an act
 The architecture contract this is built against — schema, API, WebSocket events, and the
 concurrency proofs — is [`HOSTELOPS_PHASE0_ARCHITECTURE.md`](HOSTELOPS_PHASE0_ARCHITECTURE.md).
 
-> **Current status: Phase 7 (real-time) complete.** Open two tabs — student and admin — and watch
-> the map repaint and the student get notified the instant the admin acts, with no refresh.
-> Dashboards are Phase 8.
+> **Current status: Phase 8 (dashboards) complete.** Every role has a home: students see their bed
+> and, once both are confirmed, their roommate's name; admins see the live queue, occupancy across
+> all 6 wings, and the beds out of service. Redis and k6 are optional stretch work from here.
 
 ## Demo accounts
 
@@ -338,6 +338,45 @@ The admin queue shows each request's age and time remaining, turning amber withi
 deadline and red once past it — so a request about to be swept away is visible rather than vanishing
 mid-read.
 
+### Dashboards
+
+Signing in lands each role on a different home, chosen by **what the account may do**, not what it
+is called — so a future warden role that can read the queue would land on the admin dashboard with
+no code change.
+
+**Student:** the bed they hold, or the request they are waiting on (with its expiry countdown and a
+cancel button), or a prompt to go and find one. Plus the roommate card.
+
+**Admin:** the live pending queue, occupancy across all six wings, and the beds out of service with
+a way to return them. Blocking happens on the map — the map already answers "which beds are free"
+far better than a room-number text box, and duplicating it here would mean a second, worse bed
+picker to keep in step.
+
+### Roommate visibility
+
+The most privacy-sensitive rule in the project. A name and course appear only once **both** beds in
+a Double are `ALLOCATED`:
+
+| the other bed | what you are told | name shown |
+|---|---|---|
+| free | "Free — nobody has requested it yet" | no |
+| **requested, awaiting approval** | "Someone has requested it" | **no** |
+| out of service | "Out of service for maintenance" | no |
+| allocated | name + course | **yes** |
+
+The middle row is the reason the rule exists. If a name showed there, any student could request the
+free bed in a room, read the occupant's name, and cancel — turning the map into a directory of who
+lives where. Requiring `ALLOCATED` means an admin has affirmatively confirmed both people first.
+
+Verified end to end: with the neighbour merely `PENDING`, the response contains no name, no course,
+no student code, no email. Once approved, both students see each other — simultaneously, because
+the rule is recomputed from the same data for each of them rather than stored as a "revealed" flag
+that could be set for one and not the other.
+
+Two fields reach the browser, and the query is physically incapable of returning more: it selects
+`full_name, course` only, so the `User` entity never reaches that layer and no later refactor can
+widen it to an email address by accident.
+
 ### Real-time updates
 
 **The two-tab demo.** Sign in as the student in one browser tab and the admin in another (use a
@@ -358,6 +397,7 @@ state; if the socket drops it reads `reconnecting…`, and the page refetches wh
 |---|---|---|
 | `/topic/floors/{wing}-{floor}` | anyone browsing that floor | bed status changes |
 | `/user/queue/requests` | one student, their own requests only | approved / rejected / expired |
+| `/topic/admin/queue` | ADMIN only | a signal that the queue moved — nothing else |
 
 The public message has **no student field of any kind** — not omitted at send time, but absent from
 the type, so there is nothing capable of carrying an identity to a broadcast audience. The private
@@ -379,10 +419,24 @@ that loses the unique-index race announces nothing at all.
 WebSocket is an optimisation for liveness, never the source of truth. Every action still refetches,
 a reconnect refetches, and the REST API works unchanged if the socket never connects at all.
 
-**Known gap:** the admin *queue* page does not update live — it has a Refresh button. The Phase 0
-contract defines two channels and neither is "all pending requests", so adding a third was outside
-what was agreed. The map does update live for admins, since they subscribe to the floor topic like
-anyone else.
+**The third channel** closes the gap where the "no refreshing" claim did not hold for an admin
+sitting on the queue page rather than the map. `/topic/admin/queue` is **signal-only**: the payload
+is an event name, a cause and a timestamp. No student, no request id, not even a bed. The page
+reacts by refetching `GET /api/admin/requests`, which is permission-checked and is the single place
+identities are disclosed — so a broadcast topic never carries a name even to admins. Same pattern as
+the roommate signal: the socket carries the nudge, the authenticated request carries the data.
+
+It is the only destination gated by role, checked at SUBSCRIBE in the STOMP interceptor. Verified
+live:
+
+```
+STUDENT  -> REFUSED
+GUEST    -> REFUSED
+ADMIN    -> subscribed
+```
+
+The floor topics need no gating (identity-free by construction) and `/user/queue/**` needs none
+either (Spring rewrites it per session, so it cannot be addressed to anyone else).
 
 ---
 
@@ -467,7 +521,7 @@ allow-list and produce a confusing browser-only error. Free the port, or change 
 ```bash
 # Backend
 cd backend
-./mvnw test                  # 80 tests. Needs Docker: the concurrency tests run against a
+./mvnw test                  # 87 tests. Needs Docker: the concurrency tests run against a
                              # real Postgres via Testcontainers, because H2 has no partial indexes
 ./mvnw clean package         # build the executable jar into target/
 
@@ -614,8 +668,8 @@ basement, so `BAS = 0` and `GF = 1`. Never compare `floor_level` across wings.
 | 4 | Request flow + the two partial unique indexes | done |
 | 5 | Admin approve / reject / block | done |
 | 6 | Auto-expiry of stale requests | done |
-| 7 | WebSocket real-time updates | **done** |
-| 8 | Dashboards | next |
-| 9 | Testing, incl. the two concurrency proofs | |
+| 7 | WebSocket real-time updates | done |
+| 8 | Dashboards | **done** |
+| 9 | Testing, incl. the two concurrency proofs | next |
 | 10–11 | Stretch: Redis cache-aside, k6 load test | |
 | 12–13 | Deployment, resume & interview prep | |

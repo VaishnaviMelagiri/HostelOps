@@ -11,8 +11,11 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Component;
 
+import java.security.Principal;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,6 +43,9 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     private static final Logger log = LoggerFactory.getLogger(StompAuthChannelInterceptor.class);
     private static final String BEARER_PREFIX = "Bearer ";
 
+    /** Destinations under here require a permission, not merely a valid session. */
+    private static final String ADMIN_TOPIC_PREFIX = "/topic/admin/";
+
     private final JwtService jwtService;
     private final TokenRevocationService revocationService;
     private final AppUserDetailsService userDetailsService;
@@ -57,9 +63,17 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         StompHeaderAccessor accessor =
                 MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
 
-        if (accessor == null || !StompCommand.CONNECT.equals(accessor.getCommand())) {
-            // Only the CONNECT frame carries credentials; SUBSCRIBE and the rest ride on the
-            // session established here.
+        if (accessor == null) {
+            return message;
+        }
+
+        if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            authorizeSubscription(accessor);
+            return message;
+        }
+
+        if (!StompCommand.CONNECT.equals(accessor.getCommand())) {
+            // Other frames ride on the session established at CONNECT.
             return message;
         }
 
@@ -96,6 +110,52 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             log.debug("Rejecting WebSocket CONNECT: {}", e.getMessage());
             throw new IllegalArgumentException("WebSocket authentication failed");
         }
+    }
+
+    /**
+     * Checks whether this session may subscribe to the destination it asked for.
+     *
+     * <p>Almost nothing needs gating here, and it is worth being clear why:
+     * <ul>
+     *   <li>{@code /topic/floors/**} is public to every signed-in user, and its payload contains no
+     *       identities, so there is nothing to withhold from anyone.</li>
+     *   <li>{@code /user/queue/**} is isolated by Spring itself - it rewrites the destination per
+     *       session, so a client cannot address anyone else's queue whatever it asks for. That
+     *       protection is structural and needs no check.</li>
+     *   <li>{@code /topic/admin/**} is a genuine broadcast that only one role should receive, so it
+     *       is the one destination that must be checked against a permission.</li>
+     * </ul>
+     *
+     * <p>The check names the permission, not the role, exactly like every {@code @PreAuthorize} in
+     * the project - so a future warden role able to read the queue would gain this subscription
+     * with no change here.
+     */
+    private void authorizeSubscription(StompHeaderAccessor accessor) {
+        String destination = accessor.getDestination();
+        if (destination == null || !destination.startsWith(ADMIN_TOPIC_PREFIX)) {
+            return;
+        }
+
+        if (!hasAuthority(accessor.getUser(), Permission.REQUEST_QUEUE_READ)) {
+            log.debug("Refusing subscription to {} - session lacks {}",
+                    destination, Permission.REQUEST_QUEUE_READ);
+            // Throwing here aborts the SUBSCRIBE frame; the client gets a STOMP ERROR and no
+            // messages are ever routed to it. Silently ignoring the frame instead would leave the
+            // client believing it was subscribed and waiting forever.
+            throw new IllegalArgumentException("Not permitted to subscribe to " + destination);
+        }
+    }
+
+    private static boolean hasAuthority(Principal principal, Permission permission) {
+        if (!(principal instanceof Authentication authentication)) {
+            return false;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if (permission.name().equals(authority.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String firstAuthorizationHeader(StompHeaderAccessor accessor) {

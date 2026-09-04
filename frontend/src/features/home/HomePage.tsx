@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getHealth } from '../../api/health';
-import type { Health, Role } from '../../api/types';
+import type { Role } from '../../api/types';
 import { useAuth } from '../../auth/useAuth';
 import { usePermission } from '../../auth/usePermission';
+import { AdminDashboard } from '../admin/AdminDashboard';
+import { StudentDashboard } from '../student/StudentDashboard';
 
 const ROLE_BADGE: Record<Role, string> = {
   STUDENT: 'bg-blue-100 text-blue-800',
@@ -12,168 +12,72 @@ const ROLE_BADGE: Record<Role, string> = {
 };
 
 /**
- * The signed-in landing page for Phase 2.
+ * The signed-in home, which shows whichever dashboard suits the account.
  *
- * It shows who you are and exactly what the server says you may do. That is the whole visible
- * outcome of this phase: sign in as each of the three demo accounts and watch the permission list
- * and the available actions change, with no code branching on the role name anywhere.
+ * The choice is made by asking what the account may DO, not what it is called. A future warden
+ * role that can read the queue would land on the admin dashboard with no change here — the same
+ * reason every authorization check in the backend names a permission rather than a role.
  */
 export function HomePage() {
   const { user, signOut } = useAuth();
-  const [health, setHealth] = useState<Health | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
+  const isStudent = usePermission('ALLOCATION_READ_OWN');
+  const isAdmin = usePermission('REQUEST_QUEUE_READ');
 
-  // Every permission below is asked for by name. Nothing in this file mentions a role — swap the
-  // demo account and the UI follows from the server's answer alone.
-  const canRequestBed = usePermission('REQUEST_CREATE');
-  const canApprove = usePermission('REQUEST_APPROVE');
-  const canBlockBeds = usePermission('BED_BLOCK');
-  const canSeeQueue = usePermission('REQUEST_QUEUE_READ');
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void getHealth(controller.signal).then(setHealth).catch(() => undefined);
-    return () => controller.abort();
-  }, []);
-
-  if (!user) return null; // ProtectedRoute guarantees this cannot happen; satisfies TypeScript.
+  if (!user) return null;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
           <div>
             <h1 className="text-lg font-semibold tracking-tight">HostelOps</h1>
-            <p className="text-xs text-slate-500">Room allocation &amp; approval</p>
+            <p className="text-xs text-slate-500">
+              {isAdmin ? 'Admin dashboard' : isStudent ? 'Your room' : 'Browse the building'}
+            </p>
           </div>
-          <button
-            type="button"
-            disabled={signingOut}
-            onClick={() => {
-              setSigningOut(true);
-              void signOut().finally(() => setSigningOut(false));
-            }}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium
-                       hover:bg-slate-100 disabled:opacity-50"
-          >
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>
+          <div className="flex items-center gap-3">
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>
+              {user.role}
+            </span>
+            <Link
+              to="/map"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100"
+            >
+              Floor map
+            </Link>
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-3xl space-y-6 px-6 py-10">
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold">{user.fullName}</h2>
-              <p className="text-sm text-slate-500">{user.email}</p>
-              {user.studentCode && (
-                <p className="mt-1 text-sm text-slate-500">
-                  {user.studentCode} · {user.course}
-                </p>
-              )}
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}
-            >
-              {user.role}
-            </span>
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="mb-1 font-medium">What this account can do</h3>
-          <p className="mb-4 text-sm text-slate-500">
-            Resolved by the server from your role. The buttons below are shown or hidden by these
-            same values — but the server re-checks every request regardless.
-          </p>
-
-          <ul className="mb-6 flex flex-wrap gap-2">
-            {user.permissions.map((permission) => (
-              <li
-                key={permission}
-                className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700"
-              >
-                {permission}
-              </li>
-            ))}
-          </ul>
-
-          <Link
-            to="/map"
-            className="mb-4 block rounded-lg bg-slate-900 px-4 py-3 text-center font-medium
-                       text-white hover:bg-slate-700"
-          >
-            Open the floor map
-          </Link>
-
-          {canSeeQueue && (
-            <Link
-              to="/admin"
-              className="mb-4 block rounded-lg border border-amber-300 bg-amber-50 px-4 py-3
-                         text-center font-medium text-amber-900 hover:bg-amber-100"
-            >
-              Review pending requests
-            </Link>
-          )}
-
-          <div className="space-y-2">
-            <ActionRow label="Request a bed" available={canRequestBed} note="Phase 4" />
-            <ActionRow label="Review the pending queue" available={canSeeQueue} note="Phase 5" />
-            <ActionRow label="Approve or reject requests" available={canApprove} note="Phase 5" />
-            <ActionRow label="Block a bed for maintenance" available={canBlockBeds} note="Phase 5" />
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="mb-3 font-medium">System</h3>
-          <ul className="space-y-2 text-sm">
-            <li className="flex items-center gap-2">
-              <Dot up={health?.status === 'UP'} />
-              <span>Backend</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <Dot up={health?.database === 'UP'} />
-              <span>Database</span>
-              <span className="text-slate-400">
-                {health?.database === 'UP' ? '576 beds seeded' : (health?.detail ?? 'checking…')}
-              </span>
-            </li>
-          </ul>
-        </section>
+      <div className="mx-auto max-w-4xl px-6 py-8">
+        {isAdmin ? <AdminDashboard /> : isStudent ? <StudentDashboard /> : <GuestHome />}
       </div>
     </main>
   );
 }
 
-function ActionRow({
-  label,
-  available,
-  note,
-}: {
-  label: string;
-  available: boolean;
-  note: string;
-}) {
+/** A guest can look, and nothing else. Saying so plainly beats showing buttons that only 403. */
+function GuestHome() {
   return (
-    <div
-      className={`flex items-center justify-between rounded-lg border px-4 py-2.5 ${
-        available ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50'
-      }`}
-    >
-      <span className={available ? 'text-slate-900' : 'text-slate-400 line-through'}>{label}</span>
-      <span className="text-xs text-slate-400">
-        {available ? `unlocked · ${note}` : 'not permitted'}
-      </span>
-    </div>
-  );
-}
-
-function Dot({ up }: { up: boolean }) {
-  return (
-    <span
-      className={`h-2.5 w-2.5 rounded-full ${up ? 'bg-status-available' : 'bg-status-blocked'}`}
-      aria-hidden
-    />
+    <section className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+      <h2 className="text-lg font-semibold">Read-only access</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+        You can explore all 6 wings, 404 rooms and 576 beds, and see which are free, requested,
+        allocated or out of service. Nothing you do changes anything.
+      </p>
+      <Link
+        to="/map"
+        className="mt-5 inline-block rounded-lg bg-slate-900 px-5 py-2.5 font-medium text-white hover:bg-slate-700"
+      >
+        Open the floor map
+      </Link>
+    </section>
   );
 }

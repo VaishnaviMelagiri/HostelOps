@@ -2,6 +2,9 @@ package com.hostelops.claim;
 
 import com.hostelops.claim.dto.CancelResultDto;
 import com.hostelops.claim.dto.ClaimDto;
+import com.hostelops.claim.dto.MyAllocationDto;
+import com.hostelops.claim.dto.RoommateDto;
+import com.hostelops.claim.dto.RoommateState;
 import com.hostelops.common.DomainException;
 import com.hostelops.common.ErrorCode;
 import com.hostelops.realtime.ClaimStateChangedEvent;
@@ -110,6 +113,64 @@ public class ClaimTransactions {
     @Transactional(readOnly = true)
     public Optional<ClaimDto> findLiveClaimForStudent(Long studentId) {
         return claimRepository.findLiveClaimForStudent(studentId).map(ClaimDto::from);
+    }
+
+    /**
+     * What this student holds, including a roommate's name once - and only once - both beds in a
+     * Double are confirmed.
+     *
+     * <p>The rule, in order:
+     * <ol>
+     *   <li>No live claim -> NONE. Nothing about anybody.</li>
+     *   <li>A PENDING request -> PENDING, and no roommate information whatsoever. They do not have
+     *       a room yet, so there is no roommate to speak of.</li>
+     *   <li>An allocation in a Single (capacity 1) -> roommateState NONE. No second bed exists.</li>
+     *   <li>An allocation in a Double -> report the other bed's state, and attach a name ONLY when
+     *       that state is ALLOCATED.</li>
+     * </ol>
+     *
+     * <p>Both students flip from hidden to visible at the same instant - the commit of the SECOND
+     * approval - because the rule is evaluated identically for each of them from the same data.
+     * There is no stored "roommates revealed" flag that could be set for one and not the other.
+     */
+    @Transactional(readOnly = true)
+    public MyAllocationDto myAllocation(Long studentId) {
+        var live = claimRepository.findLiveClaimForStudent(studentId);
+        if (live.isEmpty()) {
+            return MyAllocationDto.none();
+        }
+
+        BedClaim claim = live.get();
+        ClaimDto dto = ClaimDto.from(claim);
+
+        if (claim.getStatus() != ClaimStatus.ALLOCATED) {
+            return MyAllocationDto.pending(dto);
+        }
+
+        Bed bed = claim.getBed();
+        var room = bed.getRoom();
+
+        if (room.getCapacity() < 2) {
+            return MyAllocationDto.allocated(dto, RoommateState.NONE, null);
+        }
+
+        RoommateState otherBed = claimRepository
+                .findOtherBedStatus(room.getId(), bed.getId())
+                .map(status -> switch (status) {
+                    case PENDING -> RoommateState.PENDING;
+                    case ALLOCATED -> RoommateState.ALLOCATED;
+                    case BLOCKED -> RoommateState.BLOCKED;
+                    default -> RoommateState.EMPTY;
+                })
+                .orElse(RoommateState.EMPTY);
+
+        // The name is fetched by a query that CANNOT return anything unless the other claim is
+        // ALLOCATED, so this branch and that guard would both have to be wrong for a name to leak.
+        RoommateDto roommate = otherBed == RoommateState.ALLOCATED
+                ? claimRepository.findConfirmedRoommate(room.getId(), bed.getId()).orElse(null)
+                : null;
+
+        return MyAllocationDto.allocated(dto, otherBed, roommate);
     }
 
     /**

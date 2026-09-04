@@ -166,10 +166,29 @@ export interface Claim {
   decisionReason: string | null;
 }
 
-/** Mirrors `MyAllocationDto`. */
+/** Mirrors `RoommateState` — the state of the OTHER bed in a Double. */
+export type RoommateState = 'NONE' | 'EMPTY' | 'PENDING' | 'BLOCKED' | 'ALLOCATED';
+
+/**
+ * Mirrors `RoommateDto`. Two fields, and the absence of the rest is deliberate — no email, no
+ * student code, no way to contact someone before you have met them.
+ */
+export interface Roommate {
+  fullName: string;
+  course: string;
+}
+
+/**
+ * Mirrors `MyAllocationDto`.
+ *
+ * `roommate` is present only when `roommateState === 'ALLOCATED'` — the server omits the field
+ * entirely otherwise, so there is no name here to read prematurely.
+ */
 export interface MyAllocation {
   state: 'NONE' | 'PENDING' | 'ALLOCATED';
   claim: Claim | null;
+  roommateState?: RoommateState;
+  roommate?: Roommate;
 }
 
 /** Mirrors `CancelResultDto`. */
@@ -236,4 +255,41 @@ export interface BedActionResult {
   autoRejectedRequestId: number | null;
   alreadyHandled: boolean;
   reason: string | null;
+}
+
+// ─────────────────────────── Dashboards (Phase 8) ───────────────────────────
+
+/** Mirrors `WingOccupancyDto`. Counts only — no identities. */
+export interface WingOccupancy {
+  wing: string;
+  block: string;
+  roomType: 'Single' | 'Double';
+  bathroomType: 'Attached' | 'Common';
+  totalBeds: number;
+  available: number;
+  pending: number;
+  allocated: number;
+  blocked: number;
+  occupancyPercent: number;
+}
+
+/** Mirrors `OccupancyDto`. */
+export interface Occupancy {
+  totalBeds: number;
+  available: number;
+  pending: number;
+  allocated: number;
+  blocked: number;
+  byWing: WingOccupancy[];
+}
+
+/** Mirrors `OccupancyService.BlockedBedDto`. */
+export interface BlockedBed {
+  bedId: number;
+  roomNumber: number;
+  bedLabel: string;
+  wing: string;
+  floor: string;
+  reason: string | null;
+  blockedAt: string;
 }

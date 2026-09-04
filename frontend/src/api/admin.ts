@@ -1,5 +1,11 @@
 import { apiFetch } from './client';
-import type { BedActionResult, PendingQueue, ResolveResult } from './types';
+import type {
+  BedActionResult,
+  BlockedBed,
+  Occupancy,
+  PendingQueue,
+  ResolveResult,
+} from './types';
 
 /** The pending queue, oldest first. Requires REQUEST_QUEUE_READ. */
 export function pendingQueue(page = 0, size = 25): Promise<PendingQueue> {
@@ -45,4 +51,14 @@ export function unblockBed(bedId: number, reason?: string): Promise<BedActionRes
     method: 'POST',
     body: JSON.stringify({ reason: reason ?? null }),
   });
+}
+
+/** Bed counts by status, per wing and overall. Requires OCCUPANCY_READ. */
+export function occupancy(): Promise<Occupancy> {
+  return apiFetch<Occupancy>('/api/admin/occupancy');
+}
+
+/** Beds currently out of service. Gated on BED_UNBLOCK — the only reason to read it is to act. */
+export function blockedBeds(): Promise<BlockedBed[]> {
+  return apiFetch<BlockedBed[]>('/api/admin/blocked-beds');
 }

@@ -1,5 +1,6 @@
 package com.hostelops.realtime;
 
+import com.hostelops.realtime.payload.AdminQueueChangedPayload;
 import com.hostelops.realtime.payload.BedStatusChangedPayload;
 import com.hostelops.realtime.payload.RequestResolvedPayload;
 import com.hostelops.room.dto.BedStatus;
@@ -55,6 +56,7 @@ public class RealtimePublisher {
     public void onClaimStateChanged(ClaimStateChangedEvent event) {
         publishToFloor(event);
         publishToStudent(event);
+        publishToAdminQueue(event);
     }
 
     /** Public channel: everyone browsing this floor sees the bed change colour. */
@@ -98,6 +100,31 @@ public class RealtimePublisher {
         } catch (Exception e) {
             log.error("Could not notify student {} about request {}",
                     event.studentId(), event.claimId(), e);
+        }
+    }
+
+    /**
+     * Third channel: tell admins their queue moved, without telling them anything about it.
+     *
+     * <p>Signal only. The payload cannot carry a student, a request id or a bed, so a subscriber
+     * who should not be there learns nothing beyond "the queue is busy". The page refetches
+     * {@code /api/admin/requests}, which is permission-checked and is the single place identities
+     * are disclosed.
+     *
+     * <p>Subscription to this topic is restricted to REQUEST_QUEUE_READ at SUBSCRIBE time in
+     * StompAuthChannelInterceptor - the only destination in the project that is role-gated, because
+     * it is the only topic whose existence is meaningful to only one role.
+     */
+    private void publishToAdminQueue(ClaimStateChangedEvent event) {
+        if (!event.affectsPendingQueue()) {
+            return;
+        }
+        try {
+            messaging.convertAndSend(AdminQueueChangedPayload.TOPIC,
+                    AdminQueueChangedPayload.of(event.cause(), event.at()));
+            log.debug("Signalled admin queue change ({})", event.cause());
+        } catch (Exception e) {
+            log.error("Could not signal the admin queue change", e);
         }
     }
 

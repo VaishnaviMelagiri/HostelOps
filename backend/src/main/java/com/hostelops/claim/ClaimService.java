@@ -80,11 +80,14 @@ public class ClaimService {
         return result;
     }
 
-    /** What this student currently holds: nothing, a pending request, or an allocation. */
+    /**
+     * What this student currently holds, including a confirmed roommate's name and course.
+     *
+     * <p>The visibility rule lives in {@link ClaimTransactions#myAllocation} so it is applied
+     * inside the same read as everything else it depends on.
+     */
     public MyAllocationDto myAllocation(Long studentId) {
-        return transactions.findLiveClaimForStudent(studentId)
-                .map(MyAllocationDto::of)
-                .orElseGet(MyAllocationDto::none);
+        return transactions.myAllocation(studentId);
     }
 
     /** Guards against a caller passing a bed id that is not a number, before it reaches the DB. */

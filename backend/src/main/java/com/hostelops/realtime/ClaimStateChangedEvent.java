@@ -68,4 +68,17 @@ public record ClaimStateChangedEvent(
     public String floorTopic() {
         return "/topic/floors/" + wing + "-" + floor;
     }
+
+    /**
+     * Whether this change added to or removed from the admin pending queue.
+     *
+     * <p>True when a request was created, and when one left PENDING for any reason - approved,
+     * rejected, cancelled, expired, or auto-rejected by a block. False for a plain block or unblock
+     * of a free bed: the floor map changes but the queue does not, and signalling it would make
+     * every admin's page refetch a list that had not moved.
+     */
+    public boolean affectsPendingQueue() {
+        return cause == ChangeCause.REQUESTED
+                || (claimStatus != null && claimStatus != ClaimStatus.PENDING);
+    }
 }
